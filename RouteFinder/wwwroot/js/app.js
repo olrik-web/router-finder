@@ -2,18 +2,66 @@
 let routeLayer;
 let userLocation = null;
 let lastRouteParams = null;
+let userMarker = null;
 
-document.addEventListener('DOMContentLoaded', async() => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Default to Aarhus
     map = L.map('map').setView([56.1572, 10.2107], 7);
-     
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
-    
-    await useMyLocation();
+
+    // Enable click-to-select-location
+    map.on('click', onMapClick);
+
+    const dropdownBtn = document.getElementById('downloadDropdown');
+    const dropdownMenu = document.getElementById('dropdownMenu');
+
+    dropdownBtn.addEventListener('click', () => {
+        if (dropdownBtn.disabled) return;
+        dropdownMenu.parentElement.classList.toggle('open');
+    });
+
+    dropdownMenu.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const format = e.target.getAttribute('data-format');
+        if (format) {
+            dropdownMenu.parentElement.classList.remove('open');
+            await downloadRoute(format);
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.dropdown')) {
+            dropdownMenu.parentElement.classList.remove('open');
+        }
+    });
+
+    await useMyLocation(); // optional auto-locate on start
 });
+
+function onMapClick(e) {
+    const { lat, lng } = e.latlng;
+
+    if (userMarker) {
+        userMarker.setLatLng([lat, lng]);
+        // userMarker.bindPopup('Selected location').openPopup();
+    } else {
+        userMarker = L.marker([lat, lng])
+            .addTo(map)
+            // .bindPopup('Selected location')
+            .openPopup();
+    }
+
+    userLocation = { lat, lon: lng };
+
+    const routeInfo = document.getElementById('routeInfo');
+    routeInfo.style.display = 'block';
+        routeInfo.innerHTML = `
+        📍 Selected location: ${lat.toFixed(5)}, ${lng.toFixed(5)}
+    `;
+}
 
 async function useMyLocation() {
     if (!navigator.geolocation) {
@@ -27,17 +75,21 @@ async function useMyLocation() {
 
     navigator.geolocation.getCurrentPosition(
         (position) => {
-            userLocation = {
-                lat: position.coords.latitude,
-                lon: position.coords.longitude
-            };
-            map.setView([userLocation.lat, userLocation.lon], 13);
+            const { latitude, longitude } = position.coords;
 
-            // Add marker
-            L.marker([userLocation.lat, userLocation.lon])
-                .addTo(map)
-                .bindPopup('Your location')
-                .openPopup();
+            userLocation = { lat: latitude, lon: longitude };
+            map.setView([latitude, longitude], 13);
+
+            // Add or update marker
+            if (userMarker) {
+                userMarker.setLatLng([latitude, longitude]);
+                userMarker.bindPopup('Your location').openPopup();
+            } else {
+                userMarker = L.marker([latitude, longitude])
+                    .addTo(map)
+                    .bindPopup('Your location')
+                    .openPopup();
+            }
 
             btn.disabled = false;
             btn.textContent = 'Use My Location';
@@ -52,7 +104,7 @@ async function useMyLocation() {
 
 async function generateRoute() {
     if (!userLocation) {
-        alert('Please use your location first');
+        alert('Please set a location by clicking on the map or using your location.');
         return;
     }
 
@@ -79,17 +131,19 @@ async function generateRoute() {
 
         const route = await response.json();
 
-        if (routeLayer) {
-            map.removeLayer(routeLayer);
-        }
+        if (routeLayer) map.removeLayer(routeLayer);
 
-        // Draw new route
+        // Draw route
         const latLngs = route.coordinates.map(c => [c.latitude, c.longitude]);
         routeLayer = L.polyline(latLngs, { color: '#2563eb', weight: 4 }).addTo(map);
         map.fitBounds(routeLayer.getBounds());
+        
+        
 
-        document.getElementById('routeInfo').innerHTML = `
-            <strong>Route Generated!</strong><br>
+        const routeInfo = document.getElementById('routeInfo');
+        routeInfo.style.display = 'block';
+        routeInfo.innerHTML = `
+            ✅ <strong>Route Generated!</strong><br>
             Distance: ${route.distance.toFixed(1)} km<br>
             Duration: ${Math.round(route.duration / 60)} minutes
         `;
@@ -102,9 +156,6 @@ async function generateRoute() {
             seed: route.seed
         };
 
-        document.getElementById('downloadBtn').disabled = false;
-
-
     } catch (error) {
         alert('Error generating route: ' + error.message);
     } finally {
@@ -113,17 +164,15 @@ async function generateRoute() {
     }
 }
 
-async function downloadRoute() {
+async function downloadRoute(format) {
     if (!lastRouteParams) {
         alert('Please generate a route first.');
         return;
     }
 
-    const format = document.getElementById('format').value;
-
-    const btn = document.getElementById('downloadBtn');
+    const btn = document.getElementById('downloadDropdown');
     btn.disabled = true;
-    btn.textContent = 'Downloading...';
+    btn.textContent = `Downloading ${format.toUpperCase()}...`;
 
     try {
         const response = await fetch(`/api/routes/download?format=${format}`, {
@@ -147,6 +196,6 @@ async function downloadRoute() {
         alert('Error downloading route: ' + error.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Download Route';
+        btn.textContent = 'Download Route ▾';
     }
 }
