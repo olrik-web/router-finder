@@ -25,7 +25,7 @@ I just wanted a simple tool to find new running routes near my house. This is a 
 ## Tech Stack
 
 **Backend:**
-- ASP.NET Core 9.0 (Minimal APIs)
+- ASP.NET Core 9.0
 - [OpenRouteService API](https://openrouteservice.org) for route generation
 
 **Frontend:**
