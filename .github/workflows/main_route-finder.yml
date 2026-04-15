@@ -4,6 +4,9 @@
 name: Build and deploy ASP.Net Core app to Azure Web App - route-finder
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -21,23 +24,32 @@ jobs:
       - name: Set up .NET Core
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.x'
+          dotnet-version: '10.x'
+
+      - name: Restore dependencies
+        run: dotnet restore RouteFinder.sln
 
       - name: Build with dotnet
-        run: dotnet build --configuration Release
+        run: dotnet build RouteFinder.sln --configuration Release --no-restore
+
+      - name: Test with dotnet
+        run: dotnet test RouteFinder.sln --configuration Release --no-build
 
       - name: dotnet publish
-        run: dotnet publish -c Release -o "${{env.DOTNET_ROOT}}/myapp"
+        if: github.event_name != 'pull_request'
+        run: dotnet publish RouteFinder/RouteFinder.csproj -c Release -o "${{ github.workspace }}/publish" --no-build
 
       - name: Upload artifact for deployment job
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: .net-app
-          path: ${{env.DOTNET_ROOT}}/myapp
+          path: ${{ github.workspace }}/publish
 
   deploy:
     runs-on: windows-latest
     needs: build
+    if: github.event_name != 'pull_request'
     permissions:
       id-token: write #This is required for requesting the JWT
       contents: read #This is required for actions/checkout

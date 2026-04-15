@@ -5,7 +5,7 @@ using RouteFinder.Features.Route.Models;
 
 namespace RouteFinder.Features.Route.Services;
 
-public class OpenRouteService(HttpClient httpClient, ILogger<OpenRouteService> logger)
+public class OpenRouteService(HttpClient httpClient, ILogger<OpenRouteService> logger) : IOpenRouteService
 {
     private const int MaxRoundTripAttempts = 5;
 

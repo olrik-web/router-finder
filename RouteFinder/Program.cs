@@ -13,3 +13,7 @@ app.UseStaticFiles();
 app.MapRouteEndpoints();
 
 app.Run();
+
+public partial class Program
+{
+}

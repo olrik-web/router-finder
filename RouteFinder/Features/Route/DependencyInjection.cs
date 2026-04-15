@@ -24,7 +24,7 @@ public static class DependencyInjection
             .ValidateDataAnnotations()
             .ValidateOnStart();
         
-        services.AddHttpClient<OpenRouteService>((provider, client) =>
+        services.AddHttpClient<IOpenRouteService, OpenRouteService>((provider, client) =>
         {
             var options = provider.GetRequiredService<IOptions<OpenRouteServiceOptions>>().Value;
 

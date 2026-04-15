@@ -14,7 +14,7 @@ public static class RouteEndpoints
 
         app.MapPost("/api/routes/generate", async (
             RouteRequest request,
-            OpenRouteService routeService,
+            IOpenRouteService routeService,
             ILogger<LoggerCategory> logger,
             CancellationToken cancellationToken) =>
         {
@@ -85,7 +85,7 @@ public static class RouteEndpoints
         app.MapPost("/api/routes/download", async (
             DownloadRouteRequest request,
             string? format,
-            OpenRouteService routeService,
+            IOpenRouteService routeService,
             ILogger<LoggerCategory> logger,
             CancellationToken cancellationToken) =>
         {
