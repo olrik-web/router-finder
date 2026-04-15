@@ -16,8 +16,8 @@
     <div class="header-content">
         <img src="assets/favicon/favicon-32x32.png" alt="Route Finder Logo" class="logo">
         <h1>Route Finder</h1>
-        <nav class="nav-links">
-            <a href="#" onclick="useMyLocation()">My Location</a>
+        <nav class="nav-links" aria-label="Primary">
+            <button type="button" id="navUseLocationBtn" class="nav-button">My Location</button>
             <a href="#map">Map</a>
             <a href="#about">About</a>
         </nav>
@@ -28,7 +28,8 @@
     <section class="controls">
         <div class="form-group">
             <label for="distance">Distance (km)</label>
-            <input type="number" id="distance" value="5" min="1" max="50" step="0.5">
+            <input type="number" id="distance" value="5" min="1" max="50" step="0.5" aria-describedby="distanceHint">
+            <p id="distanceHint" class="input-hint">Choose a route between 1 and 50 kilometers.</p>
         </div>
         <div class="form-group">
             <label for="profile">Activity</label>
@@ -44,14 +45,23 @@
         </div>
 
         <div class="button-group">
-            <button id="generateBtn" onclick="generateRoute()">Generate Route</button>
-            <button id="useLocationBtn" onclick="useMyLocation()">Use My Location</button>
+            <button type="button" id="generateBtn">Generate Route</button>
+            <button type="button" id="useLocationBtn">Use My Location</button>
             <div class="dropdown">
-                <button id="downloadDropdown" class="dropdown-btn" disabled>Download Route ▾</button>
-                <div id="dropdownMenu" class="dropdown-menu">
-                    <a href="#" data-format="gpx">GPX (for GPS apps/watches)</a>
-                    <a href="#" data-format="geojson">GeoJSON (for maps)</a>
-                    <a href="#" data-format="json">JSON (raw)</a>
+                <button
+                    type="button"
+                    id="downloadDropdown"
+                    class="dropdown-btn"
+                    disabled
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-controls="dropdownMenu">
+                    Download Route
+                </button>
+                <div id="dropdownMenu" class="dropdown-menu" role="menu" aria-labelledby="downloadDropdown" hidden>
+                    <button type="button" class="dropdown-item" data-format="gpx" role="menuitem">GPX (for GPS apps and watches)</button>
+                    <button type="button" class="dropdown-item" data-format="geojson" role="menuitem">GeoJSON (for maps)</button>
+                    <button type="button" class="dropdown-item" data-format="json" role="menuitem">JSON (raw)</button>
                 </div>
             </div>
         </div>
@@ -59,7 +69,30 @@
     </section>
 
     <section id="map"></section>
-    <section style="display:none;" id="routeInfo"></section>
+    <section id="routeInfo" class="route-info" aria-labelledby="routeInfoHeading">
+        <div class="route-info-header">
+            <h2 id="routeInfoHeading">Route status</h2>
+            <p class="route-info-copy">Pick a start point, generate a route, then download it in your preferred format.</p>
+        </div>
+        <p id="routeStatusMessage" class="status-message status-info" role="status" aria-live="polite" aria-atomic="true">
+            Select a location on the map or use your current location to begin.
+        </p>
+        <p id="routeSelectionText" class="route-selection">No start location selected yet.</p>
+        <dl id="routeDetails" class="route-details" hidden>
+            <div class="route-detail">
+                <dt>Profile</dt>
+                <dd id="routeProfileValue">Not available</dd>
+            </div>
+            <div class="route-detail">
+                <dt>Distance</dt>
+                <dd id="routeDistanceValue">Not available</dd>
+            </div>
+            <div class="route-detail">
+                <dt>Duration</dt>
+                <dd id="routeDurationValue">Not available</dd>
+            </div>
+        </dl>
+    </section>
 
     <section id="about" class="about">
         <h2>About Route Finder</h2>

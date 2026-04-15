@@ -1,0 +1,44 @@
+1. Route Caching with Redis
+Cache generated routes by location + distance + profile. This would show you understand distributed caching, cache invalidation strategies, and performance optimization. You could implement different eviction policies and measure cache hit rates.
+2. Rate Limiting Middleware
+Protect your API (and the OpenRouteService API key) with a custom rate limiting implementation. You could use token bucket or sliding window algorithms, store state in Redis, and return proper 429 responses with Retry-After headers.
+3. Background Processing with Hangfire
+Pre-generate popular routes in the background. You could:
+
+Analyze usage patterns to predict popular routes
+Queue route generation jobs during off-peak hours
+Implement retry logic for failed API calls
+Show real-time job status using SignalR
+
+4. Multi-Provider Routing with Strategy Pattern
+Integrate multiple routing services (OpenRouteService, Mapbox, Google) and implement:
+
+Automatic fallback if one service fails
+Load balancing between providers
+Cost optimization (use free tier first, fall back to paid)
+A/B testing different providers for quality
+
+5. Route Analytics Pipeline
+Build an event-driven analytics system:
+
+Publish route events to a message queue (RabbitMQ/Azure Service Bus)
+Consume events to calculate metrics (popular areas, average distances, peak times)
+Store in a time-series database or Postgres with window functions
+Expose metrics via a separate API endpoint
+
+6. Custom Route Algorithm
+Implement your own route generation using something like:
+
+A* pathfinding on OpenStreetMap data
+Genetic algorithms to optimize for scenery/elevation
+ML-based route scoring using historical GPS data
+Integration with elevation APIs for "flat route" preferences
+
+7. Multi-Tenancy Support
+Add organization/team features with proper data isolation, showing you understand:
+
+Row-level security patterns
+Claim-based authorization
+Domain-driven design with bounded contexts
+
+The most impressive would probably be #4 (multi-provider with fallback) or #5 (analytics pipeline) because they demonstrate architectural thinking, not just CRUD skills. They show you understand resilience patterns, event-driven architecture, and system design—things that differentiate senior from junior developers.

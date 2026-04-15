@@ -7,16 +7,28 @@ using RouteFinder.Features.Route.Services;
 
 namespace RouteFinder.Tests.Infrastructure;
 
-public sealed class RouteFinderWebApplicationFactory(TestOpenRouteService routeService) : WebApplicationFactory<Program>
+public sealed class RouteFinderWebApplicationFactory(
+    TestOpenRouteService routeService,
+    IReadOnlyDictionary<string, string?>? configurationOverrides = null) : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, configurationBuilder) =>
         {
-            configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+            var configurationValues = new Dictionary<string, string?>
             {
                 ["OpenRouteService:ApiKey"] = "test-api-key"
-            });
+            };
+
+            if (configurationOverrides is not null)
+            {
+                foreach (var (key, value) in configurationOverrides)
+                {
+                    configurationValues[key] = value;
+                }
+            }
+
+            configurationBuilder.AddInMemoryCollection(configurationValues);
         });
 
         builder.ConfigureServices(services =>
