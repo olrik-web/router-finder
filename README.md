@@ -87,6 +87,26 @@ I just wanted a simple tool to find new running routes near my house. This is a 
   dotnet test RouteFinder.sln --configuration Release
   ```
 
+### Frontend Feature Checks
+
+For browser-facing changes, verify the flow with `playwright-cli` against the local app instead of relying only on static inspection.
+
+Verified locally with `playwright-cli 0.1.8`:
+- Opened `http://localhost:5156`
+- Clicked the map to set a start location
+- Generated a route
+- Downloaded `route.json`
+
+Typical workflow:
+
+```bash
+dotnet run --project RouteFinder/RouteFinder.csproj --launch-profile http
+playwright-cli open http://localhost:5156
+playwright-cli snapshot
+```
+
+In PowerShell, prefer single-quoted `playwright-cli` JavaScript snippets and use double quotes inside the JavaScript to avoid quoting issues.
+
 ## API Endpoints
 
 ### `POST /api/routes/generate`

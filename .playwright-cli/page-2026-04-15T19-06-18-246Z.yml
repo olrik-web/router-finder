@@ -1,0 +1,73 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - img "Route Finder Logo" [ref=e4]
+      - heading "Route Finder" [level=1] [ref=e5]
+      - navigation "Primary" [ref=e6]:
+        - button "My Location" [ref=e7] [cursor=pointer]
+        - link "Map" [ref=e8] [cursor=pointer]:
+          - /url: "#map"
+        - link "About" [ref=e9] [cursor=pointer]:
+          - /url: "#about"
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: Distance (km)
+        - spinbutton "Distance (km)" [ref=e14]: "5"
+        - paragraph [ref=e15]: Choose a route between 1 and 50 kilometers.
+      - generic [ref=e16]:
+        - generic [ref=e17]: Activity
+        - combobox "Activity" [ref=e18]:
+          - option "Walking/Running" [selected]
+          - option "Hiking"
+          - option "Cycling (Regular)"
+          - option "Cycling (Road)"
+          - option "Cycling (Mountain)"
+          - option "Cycling (Electric)"
+          - option "Driving (Car)"
+      - generic [ref=e19]:
+        - button "Generate Route" [ref=e20] [cursor=pointer]
+        - button "Use My Location" [ref=e21] [cursor=pointer]
+        - button "Download Route ▾" [disabled] [ref=e23]
+    - generic [ref=e24]:
+      - generic:
+        - generic [ref=e25]:
+          - button "Zoom in" [ref=e26] [cursor=pointer]: +
+          - button "Zoom out" [ref=e27] [cursor=pointer]: −
+        - generic [ref=e28]:
+          - link "Leaflet" [ref=e29] [cursor=pointer]:
+            - /url: https://leafletjs.com
+            - img [ref=e30]
+            - text: Leaflet
+          - text: "| © OpenStreetMap contributors"
+    - region "Route status" [ref=e34]:
+      - generic [ref=e35]:
+        - heading "Route status" [level=2] [ref=e36]
+        - paragraph [ref=e37]: Pick a start point, generate a route, then download it in your preferred format.
+      - status [ref=e38]: Select a location on the map or use your current location to begin.
+      - paragraph [ref=e39]: No start location selected yet.
+      - generic [ref=e40]:
+        - generic [ref=e41]:
+          - term [ref=e42]: Profile
+          - definition [ref=e43]: Not available
+        - generic [ref=e44]:
+          - term [ref=e45]: Distance
+          - definition [ref=e46]: Not available
+        - generic [ref=e47]:
+          - term [ref=e48]: Duration
+          - definition [ref=e49]: Not available
+    - generic [ref=e50]:
+      - heading "About Route Finder" [level=2] [ref=e51]
+      - paragraph [ref=e52]:
+        - text: Route Finder helps you generate circular routes for walking, running, cycling, or driving. Powered by
+        - link "OpenRouteService" [ref=e53] [cursor=pointer]:
+          - /url: https://openrouteservice.org
+        - text: and
+        - link "OpenStreetMap" [ref=e54] [cursor=pointer]:
+          - /url: https://www.openstreetmap.org
+        - text: .
+  - contentinfo [ref=e55]:
+    - paragraph [ref=e56]:
+      - text: 2026 Route Finder • Built with ❤️ using OpenStreetMap and OpenRouteService
+      - link "Pin icons created by Freepik - Flaticon" [ref=e58] [cursor=pointer]:
+        - /url: https://www.flaticon.com/free-icons/pin
