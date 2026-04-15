@@ -21,7 +21,14 @@ public class RouteGeometry
 
 public class RouteProperties
 {
+    public RouteSummary Summary { get; set; } = new();
     public List<RouteSegment> Segments { get; set; } = new();
+}
+
+public class RouteSummary
+{
+    public double Distance { get; set; }
+    public double Duration { get; set; }
 }
 
 public class RouteSegment

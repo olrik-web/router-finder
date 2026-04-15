@@ -37,8 +37,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             dropdownMenu.parentElement.classList.remove('open');
         }
     });
-
-    await useMyLocation(); // optional auto-locate on start
 });
 
 function onMapClick(e) {
@@ -147,6 +145,8 @@ async function generateRoute() {
             Distance: ${route.distance.toFixed(1)} km<br>
             Duration: ${Math.round(route.duration / 60)} minutes
         `;
+
+        document.getElementById('downloadDropdown').disabled = false;
 
         lastRouteParams = {
             latitude: userLocation.lat,

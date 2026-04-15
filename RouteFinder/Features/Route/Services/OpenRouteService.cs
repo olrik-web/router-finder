@@ -1,12 +1,14 @@
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using RouteFinder.Features.Route.Models;
 
 namespace RouteFinder.Features.Route.Services;
 
-public class OpenRouteService(HttpClient httpClient, IOptions<OpenRouteServiceOptions> options)
+public class OpenRouteService(HttpClient httpClient, ILogger<OpenRouteService> logger)
 {
+    private const int MaxRoundTripAttempts = 5;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -16,73 +18,178 @@ public class OpenRouteService(HttpClient httpClient, IOptions<OpenRouteServiceOp
         double lat,
         double lon,
         double distanceKm,
-        string profile)
+        string profile,
+        CancellationToken cancellationToken = default)
     {
-        var seed = Random.Shared.Next();
-        
-        var requestBody = new
+        var normalizedProfile = RouteValidation.NormalizeProfile(profile);
+        var targetDistanceMeters = distanceKm * 1000;
+        GeneratedRouteData? bestRoute = null;
+
+        for (var attempt = 1; attempt <= MaxRoundTripAttempts; attempt++)
         {
-            coordinates = new[] { new[] { lon, lat } },
-            options = new
+            var seed = Random.Shared.Next();
+            var candidate = await RequestCircularRouteAsync(
+                lat,
+                lon,
+                distanceKm,
+                normalizedProfile,
+                seed,
+                cancellationToken);
+
+            if (bestRoute == null || GetDistanceDelta(candidate.DistanceMeters, targetDistanceMeters) < GetDistanceDelta(bestRoute.DistanceMeters, targetDistanceMeters))
             {
-                round_trip = new
-                {
-                    length = distanceKm * 1000, // Convert to meters
-                    points = 2,
-                    seed
-                },
-                // avoid_features = new[] { "highways" }
+                bestRoute = candidate;
             }
-        };
 
-        var content = new StringContent(
-            JsonSerializer.Serialize(requestBody),
-            Encoding.UTF8,
-            "application/json"
-        );
+            if (IsRouteDistanceAcceptable(candidate.DistanceMeters, targetDistanceMeters))
+            {
+                return CreateRouteResponse(candidate);
+            }
 
-        var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"/v2/directions/{profile}/geojson?api_key={options.Value.ApiKey}")
+            logger.LogWarning(
+                "Discarding outlier round-trip candidate on attempt {Attempt} for profile {Profile}. Requested {RequestedDistanceKm:F1} km, received {ActualDistanceKm:F1} km.",
+                attempt,
+                normalizedProfile,
+                distanceKm,
+                candidate.DistanceMeters / 1000);
+        }
+
+        if (bestRoute == null)
         {
-            Content = content
-        };
+            throw new InvalidOperationException("Upstream route response did not produce any usable routes.");
+        }
 
-        var response = await httpClient.SendAsync(request);
+        logger.LogWarning(
+            "Returning best available round-trip candidate for profile {Profile}. Requested {RequestedDistanceKm:F1} km, best result {ActualDistanceKm:F1} km after {AttemptCount} attempts.",
+            normalizedProfile,
+            distanceKm,
+            bestRoute.DistanceMeters / 1000,
+            MaxRoundTripAttempts);
 
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync();
-        var route = JsonSerializer.Deserialize<RouteResponseRoot>(json, JsonOptions);
-
-        if (route == null || route.Features.Count == 0)
-            throw new InvalidOperationException("Invalid route response");
-
-        var firstFeature = route.Features[0];
-        var coords = firstFeature.Geometry.Coordinates
-            .Select(c => new Coordinate(c[1], c[0]))
-            .ToList();
-
-        var firstSegment = firstFeature.Properties.Segments.FirstOrDefault();
-
-        var distance = firstSegment?.Distance ?? 0;
-        var duration = firstSegment?.Duration ?? 0;
-
-        return new RouteResponse(coords, distance / 1000, duration, $"{distance / 1000:F1}km route", seed);
+        return CreateRouteResponse(bestRoute);
     }
-    
+
     public async Task<(byte[] Content, string ContentType)> DownloadRouteFileAsync(
         double lat,
         double lon,
         double distanceKm,
         string profile,
         string format,
-        int seed)
+        int seed,
+        CancellationToken cancellationToken = default)
     {
-        var validFormats = new[] { "json", "geojson", "gpx" };
-        if (!validFormats.Contains(format))
-            throw new ArgumentException($"Invalid format '{format}'. Valid options: json, geojson, gpx");
+        if (!RouteValidation.IsSupportedFormat(format))
+        {
+            throw new ArgumentException("Unsupported route download format.", nameof(format));
+        }
 
+        var normalizedProfile = RouteValidation.NormalizeProfile(profile);
+        var normalizedFormat = RouteValidation.NormalizeFormat(format);
+
+        using var content = CreateRoundTripRequestBody(lat, lon, distanceKm, seed);
+        using var response = await httpClient.PostAsync(
+            $"/v2/directions/{normalizedProfile}/{normalizedFormat}",
+            content,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+
+        var contentType = normalizedFormat switch
+        {
+            "json" => "application/json",
+            "geojson" => "application/geo+json",
+            "gpx" => "application/gpx+xml",
+            _ => "application/octet-stream"
+        };
+
+        return (bytes, contentType);
+    }
+
+    private async Task<GeneratedRouteData> RequestCircularRouteAsync(
+        double lat,
+        double lon,
+        double distanceKm,
+        string normalizedProfile,
+        int seed,
+        CancellationToken cancellationToken)
+    {
+        using var content = CreateRoundTripRequestBody(lat, lon, distanceKm, seed);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/v2/directions/{normalizedProfile}/geojson")
+        {
+            Content = content
+        };
+
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var route = await JsonSerializer.DeserializeAsync<RouteResponseRoot>(responseStream, JsonOptions, cancellationToken);
+
+        var firstFeature = route?.Features?.FirstOrDefault();
+        if (firstFeature?.Geometry?.Coordinates == null || firstFeature.Geometry.Coordinates.Count == 0)
+        {
+            throw new InvalidOperationException("Upstream route response did not include any coordinates.");
+        }
+
+        var coords = firstFeature.Geometry.Coordinates
+            .Where(c => c.Count >= 2)
+            .Select(c => new Coordinate(c[1], c[0]))
+            .ToList();
+
+        if (coords.Count == 0)
+        {
+            throw new InvalidOperationException("Upstream route response did not include usable coordinates.");
+        }
+
+        var summary = firstFeature.Properties?.Summary;
+        var segments = firstFeature.Properties?.Segments ?? [];
+
+        var distance = summary?.Distance > 0
+            ? summary.Distance
+            : segments.Sum(segment => segment.Distance);
+
+        var duration = summary?.Duration > 0
+            ? summary.Duration
+            : segments.Sum(segment => segment.Duration);
+
+        if (distance <= 0 || duration <= 0)
+        {
+            throw new InvalidOperationException("Upstream route response did not include route summary information.");
+        }
+
+        return new GeneratedRouteData(coords, distance, duration, seed);
+    }
+
+    private static RouteResponse CreateRouteResponse(GeneratedRouteData route)
+    {
+        return new RouteResponse(
+            route.Coordinates,
+            route.DistanceMeters / 1000,
+            route.DurationSeconds,
+            $"{route.DistanceMeters / 1000:F1}km route",
+            route.Seed);
+    }
+
+    private static bool IsRouteDistanceAcceptable(double actualDistanceMeters, double targetDistanceMeters)
+    {
+        return GetDistanceDelta(actualDistanceMeters, targetDistanceMeters) <= Math.Max(750, targetDistanceMeters * 0.35);
+    }
+
+    private static double GetDistanceDelta(double actualDistanceMeters, double targetDistanceMeters)
+    {
+        return Math.Abs(actualDistanceMeters - targetDistanceMeters);
+    }
+
+    private static StringContent CreateRoundTripRequestBody(double lat, double lon, double distanceKm, int seed)
+    {
         var requestBody = new
         {
             coordinates = new[] { new[] { lon, lat } },
@@ -97,26 +204,16 @@ public class OpenRouteService(HttpClient httpClient, IOptions<OpenRouteServiceOp
             }
         };
 
-        var content = new StringContent(
+        return new StringContent(
             JsonSerializer.Serialize(requestBody),
             Encoding.UTF8,
             "application/json"
         );
-
-        var url = $"/v2/directions/{profile}/{format}?api_key={options.Value.ApiKey}";
-        var response = await httpClient.PostAsync(url, content);
-
-        response.EnsureSuccessStatusCode();
-
-        var bytes = await response.Content.ReadAsByteArrayAsync();
-
-        var contentType = format switch
-        {
-            "json" or "geojson" => "application/json",
-            "gpx" => "application/gpx+xml",
-            _ => "application/octet-stream"
-        };
-
-        return (bytes, contentType);
     }
+
+    private sealed record GeneratedRouteData(
+        List<Coordinate> Coordinates,
+        double DistanceMeters,
+        double DurationSeconds,
+        int Seed);
 }
