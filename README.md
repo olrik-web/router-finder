@@ -1,8 +1,11 @@
 # 🗺️ Route Finder
 
-A simple web app for generating circular running, walking, and cycling routes. Built because I wanted to discover new routes in my neighborhood without paying for premium route planning services.
+A simple web app for generating circular running, walking, and cycling routes. Built because I wanted to discover new
+routes in my neighborhood without paying for premium route planning services.
 
-**Live Demo:** [https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/](https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/) *(if I haven't shut it down yet)*
+**Live Demo:
+** [https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/](https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/)
+*(if I haven't shut it down yet)*
 
 ## Features
 
@@ -19,25 +22,30 @@ A simple web app for generating circular running, walking, and cycling routes. B
 ## Why I Built This
 
 Most route planning apps either:
+
 - Require a paid subscription for circular routes
 - Only let you plan point-to-point routes
 - Have clunky UIs
 
-I just wanted a simple tool to find new running routes near my house. This is a fun side project to scratch that itch while learning more about .NET and spatial data.
+I just wanted a simple tool to find new running routes near my house. This is a fun side project to scratch that itch
+while learning more about .NET and spatial data.
 
 ## Tech Stack
 
 **Backend:**
+
 - ASP.NET Core 10.0 minimal APIs
 - [OpenRouteService API](https://openrouteservice.org) for route generation
 - xUnit + WebApplicationFactory for automated API tests
 
 **Frontend:**
+
 - Vanilla JavaScript (no frameworks)
 - [Leaflet.js](https://leafletjs.com/) for interactive maps
 - [OpenStreetMap](https://www.openstreetmap.org) tiles
 
 **Hosting:**
+
 - Azure App Service (Free F1 tier)
 - GitHub Actions for CI/CD
 
@@ -74,45 +82,27 @@ I just wanted a simple tool to find new running routes near my house. This is a 
 
 3. **Run the app**
    ```bash
-  dotnet run --project RouteFinder/RouteFinder.csproj
+   dotnet run --project RouteFinder/RouteFinder.csproj
    ```
 
 4. **Open in browser**
    ```
-  http://localhost:5156
+   http://localhost:5156
    ```
 
 5. **Run the test suite**
-  ```bash
-  dotnet test RouteFinder.sln --configuration Release
-  ```
-
-### Frontend Feature Checks
-
-For browser-facing changes, verify the flow with `playwright-cli` against the local app instead of relying only on static inspection.
-
-Verified locally with `playwright-cli 0.1.8`:
-- Opened `http://localhost:5156`
-- Clicked the map to set a start location
-- Generated a route
-- Downloaded `route.json`
-
-Typical workflow:
-
-```bash
-dotnet run --project RouteFinder/RouteFinder.csproj --launch-profile http
-playwright-cli open http://localhost:5156
-playwright-cli snapshot
-```
-
-In PowerShell, prefer single-quoted `playwright-cli` JavaScript snippets and use double quotes inside the JavaScript to avoid quoting issues.
+    ```bash
+    dotnet test RouteFinder.sln --configuration Release
+    ```
 
 ## API Endpoints
 
 ### `POST /api/routes/generate`
+
 Generate a circular route.
 
 **Request:**
+
 ```json
 {
   "latitude": 56.1572,
@@ -123,10 +113,14 @@ Generate a circular route.
 ```
 
 **Response:**
+
 ```json
 {
   "coordinates": [
-    { "latitude": 56.1572, "longitude": 10.2107 },
+    {
+      "latitude": 56.1572,
+      "longitude": 10.2107
+    },
     ...
   ],
   "distance": 5.2,
@@ -137,6 +131,7 @@ Generate a circular route.
 ```
 
 ### `POST /api/routes/download?format={gpx|geojson|json}`
+
 Download the same route in different formats.
 
 **Request:** Same as generate endpoint, but includes `seed` to get the exact same route.
@@ -146,8 +141,8 @@ Download the same route in different formats.
 - Invalid latitude, longitude, distance, profile, or download format values return `400` validation responses.
 - Upstream provider failures return problem responses instead of raw exception text.
 - The route endpoints are rate limited per IP by default:
-  - `POST /api/routes/generate`: `6` requests per `60` seconds
-  - `POST /api/routes/download`: `12` requests per `60` seconds
+    - `POST /api/routes/generate`: `6` requests per `60` seconds
+    - `POST /api/routes/download`: `12` requests per `60` seconds
 - Rate-limited requests return `429 Too Many Requests` with `Retry-After` metadata.
 
 ## Deployment
@@ -158,13 +153,16 @@ GitHub Actions now uses a gated flow:
 - Pushes to `main` run restore, build, test, publish, and deploy.
 
 **Required Azure configuration:**
+
 - App Service: Free F1 tier
 - Environment variable: `OpenRouteService__ApiKey`
 
 **Optional rate limiting configuration:**
+
 - `RateLimiting__Generate__PermitLimit`
 - `RateLimiting__Generate__WindowSeconds`
 - `RateLimiting__Download__PermitLimit`
 - `RateLimiting__Download__WindowSeconds`
 
-If you host the app behind another proxy, preserve forwarded headers so IP-based rate limiting continues to use the real client address.
+If you host the app behind another proxy, preserve forwarded headers so IP-based rate limiting continues to use the real
+client address.
