@@ -1,7 +1,6 @@
 # 🗺️ Route Finder
 
-A simple web app for generating circular running, walking, and cycling routes. Built because I wanted to discover new
-routes in my neighborhood without paying for premium route planning services.
+A simple web app for generating circular running, walking, and cycling routes.
 
 **Live Demo:
 ** [https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/](https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/)
@@ -21,14 +20,7 @@ routes in my neighborhood without paying for premium route planning services.
 
 ## Why I Built This
 
-Most route planning apps either:
-
-- Require a paid subscription for circular routes
-- Only let you plan point-to-point routes
-- Have clunky UIs
-
-I just wanted a simple tool to find new running routes near my house. This is a fun side project to scratch that itch
-while learning more about .NET and spatial data.
+I just wanted a simple tool to find new running routes near my house. This is a fun side project to scratch that itch while learning more about .NET and spatial data.
 
 ## Tech Stack
 
@@ -40,7 +32,7 @@ while learning more about .NET and spatial data.
 
 **Frontend:**
 
-- Vanilla JavaScript (no frameworks)
+- Vanilla JavaScript
 - [Leaflet.js](https://leafletjs.com/) for interactive maps
 - [OpenStreetMap](https://www.openstreetmap.org) tiles
 
@@ -164,5 +156,4 @@ GitHub Actions now uses a gated flow:
 - `RateLimiting__Download__PermitLimit`
 - `RateLimiting__Download__WindowSeconds`
 
-If you host the app behind another proxy, preserve forwarded headers so IP-based rate limiting continues to use the real
-client address.
+If you host the app behind another proxy, preserve forwarded headers so IP-based rate limiting continues to use the real client address.
