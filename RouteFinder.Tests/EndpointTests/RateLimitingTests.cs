@@ -73,6 +73,25 @@ public class RateLimitingTests
         Assert.Equal(HttpStatusCode.TooManyRequests, spoofed.StatusCode);
     }
 
+    [Fact]
+    public async Task GenerateRoute_ExceedingLimitWithNonJsonAccept_StillReturnsTooManyRequests()
+    {
+        using var factory = CreateFactory(reverseProxyEnabled: true);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Accept.ParseAdd("text/plain");
+
+        for (var index = 0; index < PermitLimit; index++)
+        {
+            await SendGenerateRequestAsync(client, "203.0.113.10");
+        }
+
+        var throttled = await SendGenerateRequestAsync(client, "203.0.113.10");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, throttled.StatusCode);
+        Assert.True(throttled.Headers.Contains("Retry-After"));
+        Assert.StartsWith("Too many routes requested.", await throttled.Content.ReadAsStringAsync(CancellationToken), StringComparison.Ordinal);
+    }
+
     private static RouteFinderWebApplicationFactory CreateFactory(bool reverseProxyEnabled)
     {
         return new RouteFinderWebApplicationFactory(configurationOverrides: new Dictionary<string, string?>

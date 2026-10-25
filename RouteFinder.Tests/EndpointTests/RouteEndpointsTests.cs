@@ -84,6 +84,52 @@ public class RouteEndpointsTests
     }
 
     [Theory]
+    [InlineData("Cycling-Regular")]
+    [InlineData(" cycling-regular ")]
+    [InlineData("CYCLING-REGULAR")]
+    public async Task GenerateRoute_WithDifferentlyCasedProfile_SendsCanonicalProfile(string profile)
+    {
+        string? usedProfile = null;
+        var routeService = new TestOpenRouteService
+        {
+            GenerateRoute = (_, _, distanceKm, usedValue, _) =>
+            {
+                usedProfile = usedValue;
+                return Task.FromResult(TestOpenRouteService.CreateRouteResponse(distanceKm));
+            }
+        };
+
+        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/api/routes/generate",
+            new RouteRequest(56.1572, 10.2107, 5, profile),
+            CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(RouteProfiles.CyclingRegular, usedProfile);
+    }
+
+    [Fact]
+    public async Task GenerateRoute_WhenProviderFails_KeepsSecurityHeaders()
+    {
+        var routeService = new TestOpenRouteService
+        {
+            GenerateRoute = (_, _, _, _, _) => throw new RouteProviderException(RouteProviderError.Unavailable, "provider failed")
+        };
+
+        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/routes/generate", ValidRequest, CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.True(response.Headers.Contains("Content-Security-Policy"));
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+    }
+
+    [Theory]
     [InlineData(RouteProviderError.NoRoutablePoint, HttpStatusCode.UnprocessableEntity, "There is no road or path near this point. Pick a spot closer to a street or trail.")]
     [InlineData(RouteProviderError.Timeout, HttpStatusCode.GatewayTimeout, "The routing service took too long to answer. Try again.")]
     [InlineData(RouteProviderError.InvalidResponse, HttpStatusCode.BadGateway, "The routing service sent back a route that could not be read. Try again.")]

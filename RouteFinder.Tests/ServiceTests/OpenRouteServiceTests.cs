@@ -159,6 +159,91 @@ public class OpenRouteServiceTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    [Theory]
+    [InlineData("""{"features":null}""")]
+    [InlineData("""{"features":[null]}""")]
+    [InlineData("""{"features":[{"geometry":null,"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":null},"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[null]},"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[[10.2,56.1],[10.3,56.2]]},"properties":null}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[[10.2,56.1],[10.3,56.2]]},"properties":{"summary":null,"segments":null}}]}""")]
+    public async Task GenerateRoundTrip_WhenResponseHasNulls_ThrowsInvalidResponse(string json)
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(json)));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken));
+
+        Assert.Equal(RouteProviderError.InvalidResponse, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenSummaryIsNull_UsesSegmentTotals()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse("""
+            {
+              "features": [
+                {
+                  "geometry": { "coordinates": [[10.2107, 56.1572], [10.2207, 56.1672]] },
+                  "properties": {
+                    "summary": null,
+                    "segments": [null, { "distance": 3000, "duration": 1000 }, { "distance": 2000, "duration": 800 }]
+                  }
+                }
+              ]
+            }
+            """)));
+        var service = CreateService(handler);
+
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
+
+        Assert.Equal(5, route.Distance);
+        Assert.Equal(1800, route.Duration);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenLaterAttemptHasNullGeometry_ReturnsBestEarlierCandidate()
+    {
+        var handler = CreateQueuedHandler(
+            CreateJsonResponse(CreateGeoJsonPayload(9000, 2400)),
+            CreateJsonResponse("""{"features":[{"geometry":null}]}"""));
+        var service = CreateService(handler);
+
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(9, route.Distance);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenRetryIsSlow_ReturnsBestEarlierCandidateWhenBudgetRunsOut()
+    {
+        var calls = 0;
+        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            if (++calls == 1)
+            {
+                return CreateJsonResponse(CreateGeoJsonPayload(9000, 2400));
+            }
+
+            // Hang until the retry budget cancels the request.
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("Unreachable.");
+        });
+        var service = new OpenRouteService(
+            new HttpClient(handler) { BaseAddress = new Uri("https://example.test") },
+            NullLogger<OpenRouteService>.Instance)
+        {
+            RetryBudget = TimeSpan.FromMilliseconds(100)
+        };
+
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(9, route.Distance);
+    }
+
     [Fact]
     public async Task GenerateRoundTrip_SendsRoundTripRequestToGeoJsonEndpoint()
     {

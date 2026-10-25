@@ -14,6 +14,9 @@ public sealed partial class OpenRouteService(HttpClient httpClient, ILogger<Open
     private const int RouteNotFoundErrorCode = 2009;
     private const int PointNotFoundErrorCode = 2010;
 
+    /// <summary>How long attempts after the first usable route may take in total.</summary>
+    internal TimeSpan RetryBudget { get; init; } = TimeSpan.FromSeconds(10);
+
     public async Task<RouteResponse> GenerateRoundTripAsync(
         double latitude,
         double longitude,
@@ -23,6 +26,7 @@ public sealed partial class OpenRouteService(HttpClient httpClient, ILogger<Open
     {
         var targetDistanceMeters = distanceKm * 1000;
         GeneratedRoute? bestRoute = null;
+        using var retryBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // OpenRouteService round trips are sometimes far longer or shorter than asked for.
         // Try a few random seeds and keep the closest one.
@@ -37,13 +41,25 @@ public sealed partial class OpenRouteService(HttpClient httpClient, ILogger<Open
                     targetDistanceMeters,
                     profile,
                     Random.Shared.Next(),
-                    cancellationToken);
+                    bestRoute is null ? cancellationToken : retryBudget.Token);
             }
             catch (RouteProviderException ex) when (bestRoute is not null)
             {
                 // A later attempt failed, but an earlier one gave us a route. Use that instead of failing.
                 LogAttemptFailed(logger, attempt, profile, ex.Error);
                 break;
+            }
+            catch (OperationCanceledException) when (bestRoute is not null && !cancellationToken.IsCancellationRequested)
+            {
+                LogRetryBudgetUsedUp(logger, attempt, profile);
+                break;
+            }
+
+            if (bestRoute is null)
+            {
+                // Retries only try to improve on this route, so together they get a fixed time budget
+                // instead of the full HTTP timeout each.
+                retryBudget.CancelAfter(RetryBudget);
             }
 
             if (bestRoute is null || GetDistanceDelta(candidate, targetDistanceMeters) < GetDistanceDelta(bestRoute, targetDistanceMeters))
@@ -135,23 +151,24 @@ public sealed partial class OpenRouteService(HttpClient httpClient, ILogger<Open
 
     private static GeneratedRoute ParseRoute(RouteResponseRoot? route)
     {
-        var feature = route?.Features.FirstOrDefault();
+        var feature = route?.Features?.FirstOrDefault();
 
-        var coordinates = feature?.Geometry.Coordinates
+        var coordinates = feature?.Geometry?.Coordinates?
+            .OfType<List<double>>()
             .Where(c => c.Count >= 2)
             .Select(c => new Coordinate(c[1], c[0]))
             .ToList() ?? [];
 
-        if (feature is null || coordinates.Count == 0)
+        if (coordinates.Count == 0)
         {
             throw new RouteProviderException(RouteProviderError.InvalidResponse, "The route did not include any coordinates.");
         }
 
-        var summary = feature.Properties.Summary;
-        var segments = feature.Properties.Segments;
+        var summary = feature?.Properties?.Summary;
+        var segments = feature?.Properties?.Segments?.OfType<RouteSegment>().ToList() ?? [];
 
-        var distance = summary.Distance > 0 ? summary.Distance : segments.Sum(s => s.Distance);
-        var duration = summary.Duration > 0 ? summary.Duration : segments.Sum(s => s.Duration);
+        var distance = summary?.Distance > 0 ? summary.Distance : segments.Sum(s => s.Distance);
+        var duration = summary?.Duration > 0 ? summary.Duration : segments.Sum(s => s.Duration);
 
         if (distance <= 0 || duration <= 0)
         {
@@ -200,6 +217,10 @@ public sealed partial class OpenRouteService(HttpClient httpClient, ILogger<Open
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "Round trip attempt {Attempt} for {Profile} failed with {Error}. Using the best earlier attempt.")]
     private static partial void LogAttemptFailed(ILogger logger, int attempt, string profile, RouteProviderError error);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Round trip attempt {Attempt} for {Profile} ran out of retry time. Using the best earlier attempt.")]
+    private static partial void LogRetryBudgetUsedUp(ILogger logger, int attempt, string profile);
 
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "No round trip for {Profile} was close to {RequestedKm:F1} km. Returning the closest one, {ActualKm:F1} km.")]

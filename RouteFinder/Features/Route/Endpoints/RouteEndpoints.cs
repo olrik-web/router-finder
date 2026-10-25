@@ -32,7 +32,7 @@ public static class RouteEndpoints
             request.Latitude!.Value,
             request.Longitude!.Value,
             request.Distance!.Value,
-            request.Profile,
+            RouteProfiles.Normalize(request.Profile),
             cancellationToken);
 
         return TypedResults.Ok(route);

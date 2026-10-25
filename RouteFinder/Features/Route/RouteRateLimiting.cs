@@ -48,17 +48,24 @@ public static class RouteRateLimiting
 
         httpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString(CultureInfo.InvariantCulture);
 
+        var detail = $"Too many routes requested. Try again in {retryAfterSeconds} seconds.";
         var problemDetailsService = httpContext.RequestServices.GetRequiredService<IProblemDetailsService>();
-        await problemDetailsService.WriteAsync(new ProblemDetailsContext
+        var written = await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = httpContext,
             ProblemDetails =
             {
                 Status = StatusCodes.Status429TooManyRequests,
-                Detail = $"Too many routes requested. Try again in {retryAfterSeconds} seconds.",
+                Detail = detail,
                 Extensions = { ["retryAfterSeconds"] = retryAfterSeconds }
             }
         });
+
+        // The client's Accept header rules out JSON. Send plain text so it still gets the 429.
+        if (!written)
+        {
+            await httpContext.Response.WriteAsync(detail, cancellationToken);
+        }
     }
 
     private static RouteRateLimitingOptions GetOptions(HttpContext httpContext) =>

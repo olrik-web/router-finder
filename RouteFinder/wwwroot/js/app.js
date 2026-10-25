@@ -29,6 +29,11 @@ const state = {
     current: null,
     /** @type {AbortController | null} */
     pendingRequest: null,
+    /**
+     * Goes up whenever the start point changes or a place search or location lookup begins.
+     * A lookup that finishes after it has moved on is ignored, so it cannot replace a newer start.
+     */
+    startVersion: 0,
 };
 
 const map = L.map('map').setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
@@ -61,6 +66,7 @@ el.routeDetails.addEventListener('click', (event) => {
  * @param {number} lat @param {number} lng @param {string} [placeName] shown instead of the coordinates
  */
 function setStart(lat, lng, placeName) {
+    state.startVersion++;
     state.start = { lat, lng };
     clearRoute();
 
@@ -89,6 +95,7 @@ async function searchPlace(event) {
         return;
     }
 
+    const version = ++state.startVersion;
     setBusy(el.searchButton, true, 'Searching...');
     setStatus('loading', `Searching for ${query}...`);
 
@@ -103,6 +110,9 @@ async function searchPlace(event) {
         }
 
         const [place] = await response.json();
+        if (version !== state.startVersion) {
+            return; // The user picked a start some other way while we waited.
+        }
         if (!place) {
             setStatus('error', `Nothing found for ${query}. Try a street name and town, or click the map.`);
             return;
@@ -111,6 +121,9 @@ async function searchPlace(event) {
         setStart(Number(place.lat), Number(place.lon), place.display_name);
         setStatus('info', 'Start point set. Choose a distance and press Generate route.');
     } catch (error) {
+        if (version !== state.startVersion) {
+            return;
+        }
         setStatus('error', error instanceof TypeError
             ? 'Search is not available right now. Click the map instead.'
             : error.message);
@@ -125,17 +138,24 @@ function useMyLocation() {
         return;
     }
 
+    const version = ++state.startVersion;
     setBusy(el.useLocationButton, true, 'Finding you...');
     setStatus('loading', 'Waiting for your location...');
 
     navigator.geolocation.getCurrentPosition(
         ({ coords }) => {
             setBusy(el.useLocationButton, false);
+            if (version !== state.startVersion) {
+                return; // The user picked a start some other way while we waited.
+            }
             setStart(coords.latitude, coords.longitude, 'Your location');
             setStatus('info', 'Using your location. Choose a distance and press Generate route.');
         },
         (error) => {
             setBusy(el.useLocationButton, false);
+            if (version !== state.startVersion) {
+                return;
+            }
             setStatus('error', geolocationErrorMessage(error));
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },

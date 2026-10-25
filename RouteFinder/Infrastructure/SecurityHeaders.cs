@@ -16,17 +16,25 @@ public static class SecurityHeaders
     {
         app.Use(async (context, next) =>
         {
-            var headers = context.Response.Headers;
-            headers.ContentSecurityPolicy = ContentSecurityPolicy;
-            headers.XContentTypeOptions = "nosniff";
-
-            // OpenStreetMap tiles and Nominatim require a Referer that identifies the site.
-            headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-            headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()";
-
+            // Add the headers as the response starts. The exception handler clears any headers
+            // set before it runs, so error responses would otherwise go out without them.
+            context.Response.OnStarting(AddHeaders, context.Response);
             await next(context);
         });
 
         return app;
+    }
+
+    private static Task AddHeaders(object state)
+    {
+        var headers = ((HttpResponse)state).Headers;
+        headers.ContentSecurityPolicy = ContentSecurityPolicy;
+        headers.XContentTypeOptions = "nosniff";
+
+        // OpenStreetMap tiles and Nominatim require a Referer that identifies the site.
+        headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()";
+
+        return Task.CompletedTask;
     }
 }

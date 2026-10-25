@@ -12,18 +12,10 @@ public record RouteRequest(
     double? Longitude,
 
     [Required(ErrorMessage = "Distance is required.")]
-    [Range(RouteRequest.MinDistanceKm, RouteRequest.MaxDistanceKm, ErrorMessage = "Distance must be between 1 and 50 km.")]
+    [Range(RouteRequest.MinDistanceKm, RouteRequest.MaxDistanceKm, ErrorMessage = "Distance must be between {1} and {2} km.")]
     double? Distance,
 
-    [AllowedValues(
-        RouteProfiles.FootWalking,
-        RouteProfiles.FootHiking,
-        RouteProfiles.CyclingRegular,
-        RouteProfiles.CyclingRoad,
-        RouteProfiles.CyclingMountain,
-        RouteProfiles.CyclingElectric,
-        RouteProfiles.DrivingCar,
-        ErrorMessage = RouteProfiles.ValidationMessage)]
+    [RouteProfile]
     string Profile = RouteProfiles.FootWalking)
 {
     public const double MinDistanceKm = 1;
