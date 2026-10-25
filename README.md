@@ -1,159 +1,106 @@
-# 🗺️ Route Finder
+# Route Finder
 
-A simple web app for generating circular running, walking, and cycling routes.
+Route Finder makes a loop route from a point you pick on the map. Choose a distance and an activity, and it asks
+[openrouteservice](https://openrouteservice.org) for a round trip that starts and ends at the same spot. You can
+download the route as GPX for a watch, Strava or Komoot, or as GeoJSON.
 
-**Live Demo:
-** [https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/](https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/)
-*(if I haven't shut it down yet)*
+I built it to find new running routes near my house, and to learn more about .NET and map data along the way.
 
-## Features
+Live demo: https://route-finder-dhbwfqbkguctg8cp.northeurope-01.azurewebsites.net/ (it may be shut down)
 
-- 🎯 **Click-to-select location** or use your current location
-- 🔄 **Generate circular routes** that start and end at the same point
-- 🧭 **Retry-backed route generation** to avoid obvious OpenRouteService round-trip outliers
-- 🚶 **Multiple activity types**: Walking, running, hiking, cycling (regular/road/mountain/electric), driving
-- 📏 **Customizable distance**: 1-50km routes
-- 💾 **Download routes** as GPX (for Garmin/Strava), GeoJSON, or JSON
-- ♿ **Inline status messaging** with keyboard-accessible download controls
-- 🛡️ **Validation and throttling** with clear API problem responses
-- 🎲 **Random route generation** - get a different route each time with the same settings
+## What it does
 
-## Why I Built This
+- Set the start point by searching for a place, clicking the map, or using your current location
+- Walking, hiking, cycling (regular, road, mountain, e-bike) and driving
+- Routes from 1 to 50 km
+- A new route each time you press the button, even with the same settings
+- Download as GPX or GeoJSON
 
-I just wanted a simple tool to find new running routes near my house. This is a fun side project to scratch that itch while learning more about .NET and spatial data.
+openrouteservice sometimes returns a loop that is much longer or shorter than asked for. The server asks for up to
+five routes and keeps the first one within 35% of the requested distance, or the closest one if none are.
 
-## Tech Stack
+## Tech stack
 
-**Backend:**
+- ASP.NET Core 10 minimal API, one endpoint
+- Plain JavaScript modules and [Leaflet](https://leafletjs.com/) with [OpenStreetMap](https://www.openstreetmap.org)
+  tiles, no build step
+- [Nominatim](https://nominatim.org) for place search
+- xUnit v3 for the API, `node --test` for the browser code
+- Azure App Service (Free F1) and GitHub Actions
 
-- ASP.NET Core 10.0 minimal APIs
-- [OpenRouteService API](https://openrouteservice.org) for route generation
-- xUnit + WebApplicationFactory for automated API tests
+## Running it locally
 
-**Frontend:**
+You need the .NET 10 SDK and a free openrouteservice API key from
+[openrouteservice.org](https://openrouteservice.org/dev/#/signup). Node 22 or newer is only needed for the frontend tests.
 
-- Vanilla JavaScript
-- [Leaflet.js](https://leafletjs.com/) for interactive maps
-- [OpenStreetMap](https://www.openstreetmap.org) tiles
+```bash
+git clone https://github.com/olrik-web/router-finder.git
+cd router-finder
+dotnet user-secrets set "OpenRouteService:ApiKey" "your-api-key" --project RouteFinder
+dotnet run --project RouteFinder
+```
 
-**Hosting:**
+Then open http://localhost:5156. In development the OpenAPI document is at `/openapi/v1.json`.
 
-- Azure App Service (Free F1 tier)
-- GitHub Actions for CI/CD
+Run the tests:
 
-## Getting Started
+```bash
+dotnet test
+npm test
+```
 
-### Prerequisites
+## API
 
-- .NET 10.0 SDK
-- OpenRouteService API key (free at [openrouteservice.org](https://openrouteservice.org/dev/#/signup))
-
-### Local Development
-
-1. **Clone the repo**
-   ```bash
-   git clone https://github.com/yourusername/route-finder.git
-   cd route-finder
-   ```
-
-2. **Set up your API key**
-
-   Using user secrets:
-   ```bash
-   dotnet user-secrets set "OpenRouteService:ApiKey" "your-api-key-here"
-   ```
-
-   Or add to `appsettings.Development.json`:
-   ```json
-   {
-     "OpenRouteService": {
-       "ApiKey": "your-api-key-here"
-     }
-   }
-   ```
-
-3. **Run the app**
-   ```bash
-   dotnet run --project RouteFinder/RouteFinder.csproj
-   ```
-
-4. **Open in browser**
-   ```
-   http://localhost:5156
-   ```
-
-5. **Run the test suite**
-    ```bash
-    dotnet test RouteFinder.sln --configuration Release
-    ```
-
-## API Endpoints
-
-### `POST /api/routes/generate`
-
-Generate a circular route.
-
-**Request:**
+`POST /api/routes/generate`
 
 ```json
 {
   "latitude": 56.1572,
   "longitude": 10.2107,
-  "distance": 5.0,
+  "distance": 5,
   "profile": "foot-walking"
 }
 ```
 
-**Response:**
+`profile` is optional and defaults to `foot-walking`. The response holds the route as a list of points, the length in
+km and the estimated time in seconds:
 
 ```json
 {
-  "coordinates": [
-    {
-      "latitude": 56.1572,
-      "longitude": 10.2107
-    },
-    ...
-  ],
+  "coordinates": [{ "latitude": 56.1572, "longitude": 10.2107 }],
   "distance": 5.2,
-  "duration": 3600,
-  "summary": "5.2km route",
-  "seed": 123456789
+  "duration": 3600
 }
 ```
 
-### `POST /api/routes/download?format={gpx|geojson|json}`
+Errors come back as [problem details](https://www.rfc-editor.org/rfc/rfc9457):
 
-Download the same route in different formats.
+| Status | When |
+| ------ | ---- |
+| 400 | A value is missing or out of range |
+| 422 | There is no road or path near the start point |
+| 429 | Too many requests from one IP (6 per minute by default) |
+| 502 | openrouteservice failed or sent something unreadable |
+| 504 | openrouteservice did not answer in time |
 
-**Request:** Same as generate endpoint, but includes `seed` to get the exact same route.
+`GET /api/health` returns `Healthy`.
 
-## API Behavior
+## Configuration
 
-- Invalid latitude, longitude, distance, profile, or download format values return `400` validation responses.
-- Upstream provider failures return problem responses instead of raw exception text.
-- The route endpoints are rate limited per IP by default:
-    - `POST /api/routes/generate`: `6` requests per `60` seconds
-    - `POST /api/routes/download`: `12` requests per `60` seconds
-- Rate-limited requests return `429 Too Many Requests` with `Retry-After` metadata.
+| Setting | Default | Notes |
+| ------- | ------- | ----- |
+| `OpenRouteService:ApiKey` | | Required |
+| `OpenRouteService:TimeoutSeconds` | 15 | Per request to openrouteservice |
+| `RateLimiting:Generate:PermitLimit` | 6 | Requests per window, per IP |
+| `RateLimiting:Generate:WindowSeconds` | 60 | |
+| `ReverseProxy:Enabled` | `false`, `true` in Production | Read the client IP from `X-Forwarded-For` |
+
+On Azure, set these as app settings with `__` in place of `:`, for example `OpenRouteService__ApiKey`.
+
+Only turn on `ReverseProxy:Enabled` when the app runs behind a proxy that adds `X-Forwarded-For`, like Azure App
+Service does. Without a proxy, a client could send any IP in that header and get around the rate limit.
 
 ## Deployment
 
-GitHub Actions now uses a gated flow:
-
-- Pull requests to `main` run restore, build, and test.
-- Pushes to `main` run restore, build, test, publish, and deploy.
-
-**Required Azure configuration:**
-
-- App Service: Free F1 tier
-- Environment variable: `OpenRouteService__ApiKey`
-
-**Optional rate limiting configuration:**
-
-- `RateLimiting__Generate__PermitLimit`
-- `RateLimiting__Generate__WindowSeconds`
-- `RateLimiting__Download__PermitLimit`
-- `RateLimiting__Download__WindowSeconds`
-
-If you host the app behind another proxy, preserve forwarded headers so IP-based rate limiting continues to use the real client address.
+The workflow in `.github/workflows` builds and tests every pull request to `main`. Pushes to `main` also publish the
+app and deploy it to Azure App Service.

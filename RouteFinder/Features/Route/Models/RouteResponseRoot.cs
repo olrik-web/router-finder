@@ -1,9 +1,11 @@
 namespace RouteFinder.Features.Route.Models;
 
+// Shapes of the OpenRouteService GeoJSON directions response. Only the fields we read are mapped.
+
 public class RouteResponseRoot
 {
     public string Type { get; set; } = "";
-    public List<RouteFeature> Features { get; set; } = new();
+    public List<RouteFeature> Features { get; set; } = [];
 }
 
 public class RouteFeature
@@ -16,13 +18,13 @@ public class RouteFeature
 public class RouteGeometry
 {
     public string Type { get; set; } = "";
-    public List<List<double>> Coordinates { get; set; } = new();
+    public List<List<double>> Coordinates { get; set; } = [];
 }
 
 public class RouteProperties
 {
     public RouteSummary Summary { get; set; } = new();
-    public List<RouteSegment> Segments { get; set; } = new();
+    public List<RouteSegment> Segments { get; set; } = [];
 }
 
 public class RouteSummary

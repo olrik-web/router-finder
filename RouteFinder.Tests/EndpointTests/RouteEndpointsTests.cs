@@ -1,8 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using RouteFinder.Features.Route;
 using RouteFinder.Features.Route.Models;
 using RouteFinder.Tests.Infrastructure;
 
@@ -10,156 +9,117 @@ namespace RouteFinder.Tests.EndpointTests;
 
 public class RouteEndpointsTests
 {
-    [Fact]
-    public async Task GenerateRoute_WithInvalidLatitude_ReturnsValidationProblem()
+    private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData(91, 10.2107, 5, "cycling-regular", "Latitude", "Latitude must be between -90 and 90.")]
+    [InlineData(56.1572, 181, 5, "cycling-regular", "Longitude", "Longitude must be between -180 and 180.")]
+    [InlineData(56.1572, 10.2107, 0.5, "cycling-regular", "Distance", "Distance must be between 1 and 50 km.")]
+    [InlineData(56.1572, 10.2107, 51, "cycling-regular", "Distance", "Distance must be between 1 and 50 km.")]
+    [InlineData(56.1572, 10.2107, 5, "hoverboard", "Profile", RouteProfiles.ValidationMessage)]
+    public async Task GenerateRoute_WithInvalidValue_ReturnsValidationProblem(
+        double latitude, double longitude, double distance, string profile, string key, string expectedError)
     {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var factory = new RouteFinderWebApplicationFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(91, 10.2107, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync(
+            "/api/routes/generate",
+            new RouteRequest(latitude, longitude, distance, profile),
+            CancellationToken);
 
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "latitude", "Latitude must be between -90 and 90.");
+        await AssertValidationProblemAsync(response, key, expectedError);
     }
 
     [Fact]
-    public async Task GenerateRoute_WithInvalidLongitude_ReturnsValidationProblem()
+    public async Task GenerateRoute_WithMissingLatitude_ReturnsValidationProblem()
     {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var factory = new RouteFinderWebApplicationFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 181, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync(
+            "/api/routes/generate",
+            new { longitude = 10.2107, distance = 5 },
+            CancellationToken);
 
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "longitude", "Longitude must be between -180 and 180.");
+        await AssertValidationProblemAsync(response, "Latitude", "Latitude is required.");
     }
 
     [Fact]
-    public async Task GenerateRoute_WithInvalidDistance_ReturnsValidationProblem()
+    public async Task GenerateRoute_WithMalformedJson_ReturnsBadRequestProblem()
     {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var factory = new RouteFinderWebApplicationFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 0.5, "cycling-regular"));
+        using var content = new StringContent("""{"latitude": 56""", System.Text.Encoding.UTF8, "application/json");
+        var response = await client.PostAsync("/api/routes/generate", content, CancellationToken);
 
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "distance", "Distance must be between 1 and 50 kilometers.");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
     }
 
     [Fact]
-    public async Task GenerateRoute_WithInvalidProfile_ReturnsValidationProblem()
+    public async Task GenerateRoute_WithoutProfile_UsesWalking()
     {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "hoverboard"));
-
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "profile", "Profile must be one of: foot-walking, foot-hiking, cycling-regular, cycling-road, cycling-mountain, cycling-electric, driving-car.");
-    }
-
-    [Fact]
-    public async Task DownloadRoute_WithoutFormat_ReturnsValidationProblem()
-    {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/download", new DownloadRouteRequest(56.1572, 10.2107, 5, 1234, "cycling-regular"));
-
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "format", "Format is required.");
-    }
-
-    [Fact]
-    public async Task DownloadRoute_WithUnsupportedFormat_ReturnsValidationProblem()
-    {
-        var routeService = new TestOpenRouteService();
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/download?format=xml", new DownloadRouteRequest(56.1572, 10.2107, 5, 1234, "cycling-regular"));
-
-        await AssertValidationProblemAsync(response, HttpStatusCode.BadRequest, "format", "Format must be one of: json, geojson, gpx.");
-    }
-
-    [Fact]
-    public async Task GenerateRoute_WhenUpstreamReturnsHttpError_ReturnsBadGateway()
-    {
+        string? usedProfile = null;
         var routeService = new TestOpenRouteService
         {
-            GenerateRouteAsync = (_, _, _, _, _) => throw new HttpRequestException("upstream failed", null, HttpStatusCode.BadGateway)
+            GenerateRoute = (_, _, distanceKm, profile, _) =>
+            {
+                usedProfile = profile;
+                return Task.FromResult(TestOpenRouteService.CreateRouteResponse(distanceKm));
+            }
         };
 
         using var factory = new RouteFinderWebApplicationFactory(routeService);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync(
+            "/api/routes/generate",
+            new { latitude = 56.1572, longitude = 10.2107, distance = 5 },
+            CancellationToken);
 
-        await AssertProblemAsync(response, HttpStatusCode.BadGateway, "Unable to generate a route from the routing provider right now.");
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(RouteProfiles.FootWalking, usedProfile);
     }
 
-    [Fact]
-    public async Task GenerateRoute_WhenRequestTimesOut_ReturnsGatewayTimeout()
+    [Theory]
+    [InlineData(RouteProviderError.NoRoutablePoint, HttpStatusCode.UnprocessableEntity, "There is no road or path near this point. Pick a spot closer to a street or trail.")]
+    [InlineData(RouteProviderError.Timeout, HttpStatusCode.GatewayTimeout, "The routing service took too long to answer. Try again.")]
+    [InlineData(RouteProviderError.InvalidResponse, HttpStatusCode.BadGateway, "The routing service sent back a route that could not be read. Try again.")]
+    [InlineData(RouteProviderError.Unavailable, HttpStatusCode.BadGateway, "The routing service is not available right now. Try again in a moment.")]
+    public async Task GenerateRoute_WhenProviderFails_ReturnsMatchingProblem(
+        RouteProviderError error, HttpStatusCode expectedStatusCode, string expectedDetail)
     {
         var routeService = new TestOpenRouteService
         {
-            GenerateRouteAsync = (_, _, _, _, _) => throw new TaskCanceledException("timed out")
+            GenerateRoute = (_, _, _, _, _) => throw new RouteProviderException(error, "provider failed")
         };
 
         using var factory = new RouteFinderWebApplicationFactory(routeService);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync("/api/routes/generate", ValidRequest, CancellationToken);
 
-        await AssertProblemAsync(response, HttpStatusCode.GatewayTimeout, "Route generation timed out. Please try again.");
+        await AssertProblemAsync(response, expectedStatusCode, expectedDetail);
     }
 
     [Fact]
-    public async Task GenerateRoute_WhenUpstreamReturnsInvalidJson_ReturnsBadGateway()
+    public async Task GenerateRoute_WhenUnexpectedExceptionOccurs_ReturnsProblemWithoutExceptionText()
     {
         var routeService = new TestOpenRouteService
         {
-            GenerateRouteAsync = (_, _, _, _, _) => throw new JsonException("bad json")
+            GenerateRoute = (_, _, _, _, _) => throw new InvalidOperationException("secret internals")
         };
 
         using var factory = new RouteFinderWebApplicationFactory(routeService);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync("/api/routes/generate", ValidRequest, CancellationToken);
 
-        await AssertProblemAsync(response, HttpStatusCode.BadGateway, "The routing provider returned an unreadable response.");
-    }
-
-    [Fact]
-    public async Task GenerateRoute_WhenUpstreamRoutePayloadIsInvalid_ReturnsBadGateway()
-    {
-        var routeService = new TestOpenRouteService
-        {
-            GenerateRouteAsync = (_, _, _, _, _) => throw new InvalidOperationException("invalid route")
-        };
-
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
-
-        await AssertProblemAsync(response, HttpStatusCode.BadGateway, "The routing provider returned an unexpected route response.");
-    }
-
-    [Fact]
-    public async Task GenerateRoute_WhenUnexpectedExceptionOccurs_ReturnsInternalServerError()
-    {
-        var routeService = new TestOpenRouteService
-        {
-            GenerateRouteAsync = (_, _, _, _, _) => throw new Exception("boom")
-        };
-
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
-
-        await AssertProblemAsync(response, HttpStatusCode.InternalServerError, "An unexpected error occurred while generating the route.");
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("secret internals", await response.Content.ReadAsStringAsync(CancellationToken), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -167,104 +127,68 @@ public class RouteEndpointsTests
     {
         var routeService = new TestOpenRouteService
         {
-            GenerateRouteAsync = (_, _, _, _, _) => Task.FromResult(TestOpenRouteService.CreateRouteResponse(4.8, 1620, 8765))
+            GenerateRoute = (_, _, _, _, _) => Task.FromResult(TestOpenRouteService.CreateRouteResponse(4.8, 1620))
         };
 
         using var factory = new RouteFinderWebApplicationFactory(routeService);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/generate", new RouteRequest(56.1572, 10.2107, 5, "cycling-regular"));
+        var response = await client.PostAsJsonAsync("/api/routes/generate", ValidRequest, CancellationToken);
 
         response.EnsureSuccessStatusCode();
 
-        var route = await response.Content.ReadFromJsonAsync<RouteResponse>();
+        var route = await response.Content.ReadFromJsonAsync<RouteResponse>(CancellationToken);
 
         Assert.NotNull(route);
         Assert.Equal(4.8, route.Distance);
         Assert.Equal(1620, route.Duration);
-        Assert.Equal(8765, route.Seed);
         Assert.Equal(2, route.Coordinates.Count);
     }
 
     [Fact]
-    public async Task DownloadRoute_WhenUpstreamReturnsHttpError_ReturnsBadGateway()
+    public async Task Root_ServesIndexPageWithSecurityHeaders()
     {
-        var routeService = new TestOpenRouteService
-        {
-            DownloadRouteAsync = (_, _, _, _, _, _, _) => throw new HttpRequestException("upstream failed", null, HttpStatusCode.BadGateway)
-        };
-
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
+        using var factory = new RouteFinderWebApplicationFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/api/routes/download?format=gpx", new DownloadRouteRequest(56.1572, 10.2107, 5, 1234, "cycling-regular"));
-
-        await AssertProblemAsync(response, HttpStatusCode.BadGateway, "Unable to download a route from the routing provider right now.");
-    }
-
-    [Fact]
-    public async Task DownloadRoute_WhenRequestTimesOut_ReturnsGatewayTimeout()
-    {
-        var routeService = new TestOpenRouteService
-        {
-            DownloadRouteAsync = (_, _, _, _, _, _, _) => throw new TaskCanceledException("timed out")
-        };
-
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/download?format=gpx", new DownloadRouteRequest(56.1572, 10.2107, 5, 1234, "cycling-regular"));
-
-        await AssertProblemAsync(response, HttpStatusCode.GatewayTimeout, "Route download timed out. Please try again.");
-    }
-
-    [Fact]
-    public async Task DownloadRoute_WithValidRequest_ReturnsFilePayload()
-    {
-        var expectedContent = Encoding.UTF8.GetBytes("<gpx></gpx>");
-
-        var routeService = new TestOpenRouteService
-        {
-            DownloadRouteAsync = (_, _, _, _, _, _, _) => Task.FromResult<(byte[] Content, string ContentType)>((expectedContent, "application/gpx+xml"))
-        };
-
-        using var factory = new RouteFinderWebApplicationFactory(routeService);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync("/api/routes/download?format=gpx", new DownloadRouteRequest(56.1572, 10.2107, 5, 1234, "cycling-regular"));
+        var response = await client.GetAsync("/", CancellationToken);
 
         response.EnsureSuccessStatusCode();
-
-        var content = await response.Content.ReadAsByteArrayAsync();
-
-        Assert.Equal("application/gpx+xml", response.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(expectedContent, content);
-        Assert.Contains("route.gpx", response.Content.Headers.ContentDisposition?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.True(response.Headers.Contains("Content-Security-Policy"));
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
     }
 
-    private static async Task AssertValidationProblemAsync(
-        HttpResponseMessage response,
-        HttpStatusCode expectedStatusCode,
-        string key,
-        string expectedError)
+    [Fact]
+    public async Task Health_ReturnsHealthy()
     {
-        Assert.Equal(expectedStatusCode, response.StatusCode);
+        using var factory = new RouteFinderWebApplicationFactory();
+        using var client = factory.CreateClient();
 
-        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemDetails>();
+        var response = await client.GetAsync("/api/health", CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Healthy", await response.Content.ReadAsStringAsync(CancellationToken));
+    }
+
+    private static readonly RouteRequest ValidRequest = new(56.1572, 10.2107, 5, RouteProfiles.CyclingRegular);
+
+    private static async Task AssertValidationProblemAsync(HttpResponseMessage response, string key, string expectedError)
+    {
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemDetails>(CancellationToken);
 
         Assert.NotNull(problem);
-        Assert.True(problem.Errors.TryGetValue(key, out var errors));
+        Assert.True(problem.Errors.TryGetValue(key, out var errors), $"No error for '{key}'. Keys: {string.Join(", ", problem.Errors.Keys)}");
         Assert.Contains(expectedError, errors);
     }
 
-    private static async Task AssertProblemAsync(
-        HttpResponseMessage response,
-        HttpStatusCode expectedStatusCode,
-        string expectedDetail)
+    private static async Task AssertProblemAsync(HttpResponseMessage response, HttpStatusCode expectedStatusCode, string expectedDetail)
     {
         Assert.Equal(expectedStatusCode, response.StatusCode);
 
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(CancellationToken);
 
         Assert.NotNull(problem);
         Assert.Equal((int)expectedStatusCode, problem.Status);

@@ -1,5 +1,19 @@
 bin/
 obj/
 /packages/
+/publish/
+TestResults/
+
+# Local settings and secrets
+appsettings.Development.json
+*.user
+
+# IDEs
+.idea/
+.vs/
+.vscode/
 riderModule.iml
 /_ReSharper.Caches/
+
+# playwright-cli snapshots
+.playwright-cli/
