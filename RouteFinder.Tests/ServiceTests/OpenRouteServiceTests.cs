@@ -1,6 +1,8 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using RouteFinder.Features.Route;
 using RouteFinder.Features.Route.Services;
 using RouteFinder.Tests.Infrastructure;
 
@@ -8,13 +10,15 @@ namespace RouteFinder.Tests.ServiceTests;
 
 public class OpenRouteServiceTests
 {
+    private static CancellationToken CancellationToken => TestContext.Current.CancellationToken;
+
     [Fact]
-    public async Task GenerateCircularRoute_ReturnsFirstAcceptableCandidateWithoutRetrying()
+    public async Task GenerateRoundTrip_ReturnsFirstAcceptableCandidateWithoutRetrying()
     {
         var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(CreateGeoJsonPayload(5100, 1800))));
         var service = CreateService(handler);
 
-        var route = await service.GenerateCircularRoute(56.1572, 10.2107, 5, "cycling-regular");
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
         Assert.Equal(1, handler.CallCount);
         Assert.Equal(5.1, route.Distance);
@@ -22,70 +26,117 @@ public class OpenRouteServiceTests
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_RetriesUntilAnAcceptableCandidateIsReturned()
+    public async Task GenerateRoundTrip_RetriesUntilAnAcceptableCandidateIsReturned()
     {
-        var responses = new Queue<HttpResponseMessage>(
-        [
+        var handler = CreateQueuedHandler(
             CreateJsonResponse(CreateGeoJsonPayload(9000, 2400)),
-            CreateJsonResponse(CreateGeoJsonPayload(4800, 1800))
-        ]);
-
-        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(responses.Dequeue()));
+            CreateJsonResponse(CreateGeoJsonPayload(4800, 1800)));
         var service = CreateService(handler);
 
-        var route = await service.GenerateCircularRoute(56.1572, 10.2107, 5, "cycling-regular");
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
         Assert.Equal(2, handler.CallCount);
         Assert.Equal(4.8, route.Distance);
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_ReturnsClosestCandidateAfterFiveOutliers()
+    public async Task GenerateRoundTrip_ReturnsClosestCandidateAfterFiveOutliers()
     {
-        var responses = new Queue<HttpResponseMessage>(
-        [
+        var handler = CreateQueuedHandler(
             CreateJsonResponse(CreateGeoJsonPayload(95000, 2400)),
             CreateJsonResponse(CreateGeoJsonPayload(12000, 2400)),
             CreateJsonResponse(CreateGeoJsonPayload(9000, 2400)),
             CreateJsonResponse(CreateGeoJsonPayload(8200, 2400)),
-            CreateJsonResponse(CreateGeoJsonPayload(6800, 2400))
-        ]);
-
-        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(responses.Dequeue()));
+            CreateJsonResponse(CreateGeoJsonPayload(6800, 2400)));
         var service = CreateService(handler);
 
-        var route = await service.GenerateCircularRoute(56.1572, 10.2107, 5, "cycling-regular");
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
         Assert.Equal(5, handler.CallCount);
         Assert.Equal(6.8, route.Distance);
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_AcceptsCandidateWithinThirtyFivePercentThreshold()
+    public async Task GenerateRoundTrip_WhenLaterAttemptFails_ReturnsBestEarlierCandidate()
     {
-        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(CreateGeoJsonPayload(6700, 1800))));
+        var handler = CreateQueuedHandler(
+            CreateJsonResponse(CreateGeoJsonPayload(9000, 2400)),
+            new HttpResponseMessage(HttpStatusCode.TooManyRequests));
         var service = CreateService(handler);
 
-        var route = await service.GenerateCircularRoute(56.1572, 10.2107, 5, "cycling-regular");
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
-        Assert.Equal(1, handler.CallCount);
-        Assert.Equal(6.7, route.Distance);
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(9, route.Distance);
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_AcceptsCandidateWithinSevenHundredFiftyMeterFloor()
+    public async Task GenerateRoundTrip_WhenFirstAttemptFails_Throws()
     {
-        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(CreateGeoJsonPayload(1700, 900))));
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)));
         var service = CreateService(handler);
 
-        var route = await service.GenerateCircularRoute(56.1572, 10.2107, 1, "cycling-regular");
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken));
 
+        Assert.Equal(RouteProviderError.Unavailable, exception.Error);
         Assert.Equal(1, handler.CallCount);
-        Assert.Equal(1.7, route.Distance);
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_ThrowsWhenCoordinatesAreMissing()
+    public async Task GenerateRoundTrip_WhenPointIsNotRoutable_ThrowsNoRoutablePoint()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(
+            """{"error":{"code":2010,"message":"Could not find routable point within a radius of 350.0 meters."}}""",
+            HttpStatusCode.NotFound)));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.0, 11.0, 5, "foot-walking", CancellationToken));
+
+        Assert.Equal(RouteProviderError.NoRoutablePoint, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenAuthFails_ThrowsUnavailable()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(
+            """{"error":"Access to this API has been disallowed"}""",
+            HttpStatusCode.Forbidden)));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "foot-walking", CancellationToken));
+
+        Assert.Equal(RouteProviderError.Unavailable, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenResponseIsNotJson_ThrowsInvalidResponse()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse("<html>oops</html>")));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "foot-walking", CancellationToken));
+
+        Assert.Equal(RouteProviderError.InvalidResponse, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenRequestTimesOut_ThrowsTimeout()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => throw new TaskCanceledException("timed out"));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "foot-walking", CancellationToken));
+
+        Assert.Equal(RouteProviderError.Timeout, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenCoordinatesAreMissing_ThrowsInvalidResponse()
     {
         var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse("""
             {
@@ -93,42 +144,119 @@ public class OpenRouteServiceTests
               "features": [
                 {
                   "type": "Feature",
-                  "geometry": {
-                    "type": "LineString",
-                    "coordinates": []
-                  },
+                  "geometry": { "type": "LineString", "coordinates": [] },
+                  "properties": { "summary": { "distance": 5000, "duration": 1800 }, "segments": [] }
+                }
+              ]
+            }
+            """)));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken));
+
+        Assert.Equal(RouteProviderError.InvalidResponse, exception.Error);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("""{"features":null}""")]
+    [InlineData("""{"features":[null]}""")]
+    [InlineData("""{"features":[{"geometry":null,"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":null},"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[null]},"properties":{"summary":{"distance":5000,"duration":1800}}}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[[10.2,56.1],[10.3,56.2]]},"properties":null}]}""")]
+    [InlineData("""{"features":[{"geometry":{"coordinates":[[10.2,56.1],[10.3,56.2]]},"properties":{"summary":null,"segments":null}}]}""")]
+    public async Task GenerateRoundTrip_WhenResponseHasNulls_ThrowsInvalidResponse(string json)
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(json)));
+        var service = CreateService(handler);
+
+        var exception = await Assert.ThrowsAsync<RouteProviderException>(
+            () => service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken));
+
+        Assert.Equal(RouteProviderError.InvalidResponse, exception.Error);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenSummaryIsNull_UsesSegmentTotals()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse("""
+            {
+              "features": [
+                {
+                  "geometry": { "coordinates": [[10.2107, 56.1572], [10.2207, 56.1672]] },
                   "properties": {
-                    "summary": {
-                      "distance": 5000,
-                      "duration": 1800
-                    },
-                    "segments": []
+                    "summary": null,
+                    "segments": [null, { "distance": 3000, "duration": 1000 }, { "distance": 2000, "duration": 800 }]
                   }
                 }
               ]
             }
             """)));
-
         var service = CreateService(handler);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateCircularRoute(56.1572, 10.2107, 5, "cycling-regular"));
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
-        Assert.Equal("Upstream route response did not include any coordinates.", exception.Message);
-        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(5, route.Distance);
+        Assert.Equal(1800, route.Duration);
     }
 
     [Fact]
-    public async Task GenerateCircularRoute_SendsGeoJsonRequestsToTheExpectedEndpoint()
+    public async Task GenerateRoundTrip_WhenLaterAttemptHasNullGeometry_ReturnsBestEarlierCandidate()
+    {
+        var handler = CreateQueuedHandler(
+            CreateJsonResponse(CreateGeoJsonPayload(9000, 2400)),
+            CreateJsonResponse("""{"features":[{"geometry":null}]}"""));
+        var service = CreateService(handler);
+
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(9, route.Distance);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_WhenRetryIsSlow_ReturnsBestEarlierCandidateWhenBudgetRunsOut()
+    {
+        var calls = 0;
+        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            if (++calls == 1)
+            {
+                return CreateJsonResponse(CreateGeoJsonPayload(9000, 2400));
+            }
+
+            // Hang until the retry budget cancels the request.
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("Unreachable.");
+        });
+        var service = new OpenRouteService(
+            new HttpClient(handler) { BaseAddress = new Uri("https://example.test") },
+            NullLogger<OpenRouteService>.Instance)
+        {
+            RetryBudget = TimeSpan.FromMilliseconds(100)
+        };
+
+        var route = await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(9, route.Distance);
+    }
+
+    [Fact]
+    public async Task GenerateRoundTrip_SendsRoundTripRequestToGeoJsonEndpoint()
     {
         var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(CreateJsonResponse(CreateGeoJsonPayload(5000, 1800))));
         var service = CreateService(handler);
 
-        await service.GenerateCircularRoute(56.1572, 10.2107, 5, "Cycling-Regular");
+        await service.GenerateRoundTripAsync(56.1572, 10.2107, 5, "cycling-regular", CancellationToken);
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, request.Method);
         Assert.Equal("https://example.test/v2/directions/cycling-regular/geojson", request.RequestUri?.ToString());
-        Assert.Contains("\"length\":5000", request.Body);
+        Assert.Contains("\"round_trip\":{\"length\":5000", request.Body, StringComparison.Ordinal);
+        Assert.Contains("\"coordinates\":[[10.2107,56.1572]]", request.Body, StringComparison.Ordinal);
     }
 
     private static OpenRouteService CreateService(StubHttpMessageHandler handler)
@@ -141,11 +269,17 @@ public class OpenRouteServiceTests
         return new OpenRouteService(client, NullLogger<OpenRouteService>.Instance);
     }
 
-    private static HttpResponseMessage CreateJsonResponse(string json)
+    private static StubHttpMessageHandler CreateQueuedHandler(params HttpResponseMessage[] responses)
     {
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        var queue = new Queue<HttpResponseMessage>(responses);
+        return new StubHttpMessageHandler((_, _) => Task.FromResult(queue.Dequeue()));
+    }
+
+    private static HttpResponseMessage CreateJsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK)
+    {
+        return new HttpResponseMessage(statusCode)
         {
-            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
     }
 
@@ -170,11 +304,7 @@ public class OpenRouteServiceTests
                     },
                     properties = new
                     {
-                        summary = new
-                        {
-                            distance = distanceMeters,
-                            duration = durationSeconds
-                        },
+                        summary = new { distance = distanceMeters, duration = durationSeconds },
                         segments = Array.Empty<object>()
                     }
                 }

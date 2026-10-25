@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RouteFinder/RouteFinder.csproj" />
+  <Project Path="RouteFinder.Tests/RouteFinder.Tests.csproj" />
+</Solution>

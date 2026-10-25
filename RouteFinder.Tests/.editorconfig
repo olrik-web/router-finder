@@ -1,0 +1,5 @@
+[*.cs]
+# Test names use Method_Scenario_Expectation.
+dotnet_diagnostic.CA1707.severity = none
+# Inline arrays in test payloads are fine.
+dotnet_diagnostic.CA1861.severity = none

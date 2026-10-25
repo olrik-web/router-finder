@@ -1,518 +1,317 @@
-﻿let map;
-let routeLayer;
-let userLocation = null;
-let lastRouteParams = null;
-let userMarker = null;
-let elements;
-let dropdownItems = [];
+﻿import { buildRouteFile } from './route-export.js';
+import { formatCoordinates, formatDuration, readErrorMessage } from './format.js';
 
-document.addEventListener('DOMContentLoaded', async () => {
-    elements = {
-        distanceInput: document.getElementById('distance'),
-        profileSelect: document.getElementById('profile'),
-        generateButton: document.getElementById('generateBtn'),
-        useLocationButton: document.getElementById('useLocationBtn'),
-        navUseLocationButton: document.getElementById('navUseLocationBtn'),
-        downloadButton: document.getElementById('downloadDropdown'),
-        dropdown: document.querySelector('.dropdown'),
-        dropdownMenu: document.getElementById('dropdownMenu'),
-        routeStatusMessage: document.getElementById('routeStatusMessage'),
-        routeSelectionText: document.getElementById('routeSelectionText'),
-        routeDetails: document.getElementById('routeDetails'),
-        routeProfileValue: document.getElementById('routeProfileValue'),
-        routeDistanceValue: document.getElementById('routeDistanceValue'),
-        routeDurationValue: document.getElementById('routeDurationValue')
-    };
+const DEFAULT_VIEW = { center: [56.1572, 10.2107], zoom: 7 };
+const START_ZOOM = 14;
+const FOOT_PROFILES = new Set(['foot-walking', 'foot-hiking']);
 
-    dropdownItems = Array.from(elements.dropdownMenu.querySelectorAll('[role="menuitem"]'));
+const el = {
+    searchForm: document.getElementById('searchForm'),
+    placeSearch: document.getElementById('placeSearch'),
+    searchButton: document.getElementById('searchButton'),
+    useLocationButton: document.getElementById('useLocationButton'),
+    routeForm: document.getElementById('routeForm'),
+    distance: document.getElementById('distance'),
+    profile: document.getElementById('profile'),
+    generateButton: document.getElementById('generateButton'),
+    status: document.getElementById('status'),
+    startText: document.getElementById('startText'),
+    routeDetails: document.getElementById('routeDetails'),
+    routeProfile: document.getElementById('routeProfile'),
+    routeDistance: document.getElementById('routeDistance'),
+    routeDuration: document.getElementById('routeDuration'),
+};
 
-    initializeButtonLabels();
-    updateDownloadAvailability();
+const state = {
+    /** @type {{ lat: number, lng: number } | null} */
+    start: null,
+    /** @type {{ params: { profile: string }, route: import('./route-export.js').Route } | null} */
+    current: null,
+    /** @type {AbortController | null} */
+    pendingRequest: null,
+    /**
+     * Goes up whenever the start point changes or a place search or location lookup begins.
+     * A lookup that finishes after it has moved on is ignored, so it cannot replace a newer start.
+     */
+    startVersion: 0,
+};
 
-    map = L.map('map').setView([56.1572, 10.2107], 7);
+const map = L.map('map').setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
+let startMarker = null;
+let routeLayer = null;
 
-    map.on('click', onMapClick);
-
-    elements.generateButton.addEventListener('click', generateRoute);
-    elements.useLocationButton.addEventListener('click', useMyLocation);
-    elements.navUseLocationButton.addEventListener('click', useMyLocation);
-    elements.downloadButton.addEventListener('click', toggleDropdown);
-    elements.downloadButton.addEventListener('keydown', onDropdownButtonKeyDown);
-    elements.dropdownMenu.addEventListener('click', onDropdownMenuClick);
-    elements.dropdownMenu.addEventListener('keydown', onDropdownMenuKeyDown);
-    elements.distanceInput.addEventListener('input', onRouteInputsChanged);
-    elements.profileSelect.addEventListener('change', onRouteInputsChanged);
-
-    document.addEventListener('click', (event) => {
-        if (!event.target.closest('.dropdown')) {
-            closeDropdown();
-        }
-    });
-
-    document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && isDropdownOpen()) {
-            event.preventDefault();
-            closeDropdown(true);
-        }
-    });
+map.on('click', (event) => {
+    setStart(event.latlng.lat, event.latlng.lng);
+    setStatus('info', 'Start point set. Choose a distance and press Generate route.');
+});
+el.searchForm.addEventListener('submit', searchPlace);
+el.useLocationButton.addEventListener('click', useMyLocation);
+el.routeForm.addEventListener('submit', generateRoute);
+el.distance.addEventListener('input', onSettingsChanged);
+el.profile.addEventListener('change', onSettingsChanged);
+el.routeDetails.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-format]');
+    if (button) {
+        downloadRoute(button.dataset.format);
+    }
 });
 
-function onMapClick(e) {
-    const { lat, lng } = e.latlng;
+/**
+ * Moves the start point and throws away any route or request for the old one.
+ * @param {number} lat @param {number} lng @param {string} [placeName] shown instead of the coordinates
+ */
+function setStart(lat, lng, placeName) {
+    state.startVersion++;
+    state.start = { lat, lng };
+    clearRoute();
 
-    updateUserMarker(lat, lng, 'Selected start location');
-    map.setView([lat, lng], Math.max(map.getZoom(), 13));
-    updateUserLocation(lat, lng, 'Start location selected. Generate a route when ready.');
-}
+    const popup = document.createElement('span');
+    popup.textContent = placeName ?? 'Start point';
 
-function initializeButtonLabels() {
-    [elements.generateButton, elements.useLocationButton, elements.navUseLocationButton, elements.downloadButton].forEach((button) => {
-        button.dataset.defaultLabel = button.textContent.trim();
-    });
-}
-
-function isDropdownOpen() {
-    return elements.dropdown.classList.contains('open');
-}
-
-function openDropdown(focusIndex = null) {
-    if (elements.downloadButton.disabled) {
-        return;
-    }
-
-    elements.dropdown.classList.add('open');
-    elements.dropdownMenu.hidden = false;
-    elements.downloadButton.setAttribute('aria-expanded', 'true');
-
-    if (focusIndex !== null && dropdownItems[focusIndex]) {
-        dropdownItems[focusIndex].focus();
-    }
-}
-
-function closeDropdown(restoreFocus = false) {
-    elements.dropdown.classList.remove('open');
-    elements.dropdownMenu.hidden = true;
-    elements.downloadButton.setAttribute('aria-expanded', 'false');
-
-    if (restoreFocus && !elements.downloadButton.disabled) {
-        elements.downloadButton.focus();
-    }
-}
-
-function toggleDropdown() {
-    if (elements.downloadButton.disabled) {
-        return;
-    }
-
-    if (isDropdownOpen()) {
-        closeDropdown();
+    if (startMarker) {
+        startMarker.setLatLng([lat, lng]);
     } else {
-        openDropdown();
+        startMarker = L.marker([lat, lng], { alt: 'Start point' }).addTo(map);
     }
+    startMarker.bindPopup(popup).openPopup();
+
+    map.setView([lat, lng], Math.max(map.getZoom(), START_ZOOM));
+    el.startText.textContent = `Start: ${placeName ?? formatCoordinates(lat, lng)}`;
 }
 
-function onDropdownButtonKeyDown(event) {
-    if (elements.downloadButton.disabled) {
-        return;
-    }
-
-    switch (event.key) {
-        case 'Enter':
-        case ' ': {
-            event.preventDefault();
-            if (isDropdownOpen()) {
-                closeDropdown();
-            } else {
-                openDropdown(0);
-            }
-            break;
-        }
-        case 'ArrowDown': {
-            event.preventDefault();
-            openDropdown(0);
-            break;
-        }
-        case 'ArrowUp': {
-            event.preventDefault();
-            openDropdown(dropdownItems.length - 1);
-            break;
-        }
-    }
-}
-
-function onDropdownMenuClick(event) {
-    const item = event.target.closest('[role="menuitem"]');
-    if (!item) {
-        return;
-    }
-
+/** @param {SubmitEvent} event */
+async function searchPlace(event) {
     event.preventDefault();
-    closeDropdown();
-    downloadRoute(item.dataset.format);
-}
 
-function onDropdownMenuKeyDown(event) {
-    const currentIndex = dropdownItems.indexOf(document.activeElement);
-
-    switch (event.key) {
-        case 'ArrowDown': {
-            event.preventDefault();
-            focusDropdownItem(currentIndex + 1);
-            break;
-        }
-        case 'ArrowUp': {
-            event.preventDefault();
-            focusDropdownItem(currentIndex - 1);
-            break;
-        }
-        case 'Home': {
-            event.preventDefault();
-            focusDropdownItem(0);
-            break;
-        }
-        case 'End': {
-            event.preventDefault();
-            focusDropdownItem(dropdownItems.length - 1);
-            break;
-        }
-        case 'Escape': {
-            event.preventDefault();
-            closeDropdown(true);
-            break;
-        }
-        case 'Tab': {
-            closeDropdown();
-            break;
-        }
-        case 'Enter':
-        case ' ': {
-            const item = document.activeElement.closest('[role="menuitem"]');
-            if (!item) {
-                return;
-            }
-
-            event.preventDefault();
-            closeDropdown();
-            downloadRoute(item.dataset.format);
-            break;
-        }
-    }
-}
-
-function focusDropdownItem(index) {
-    if (dropdownItems.length === 0) {
+    const query = el.placeSearch.value.trim();
+    if (!query) {
+        setStatus('error', 'Type an address or place name to search for.');
+        el.placeSearch.focus();
         return;
     }
 
-    const normalizedIndex = (index + dropdownItems.length) % dropdownItems.length;
-    dropdownItems[normalizedIndex].focus();
-}
+    const version = ++state.startVersion;
+    setBusy(el.searchButton, true, 'Searching...');
+    setStatus('loading', `Searching for ${query}...`);
 
-function onRouteInputsChanged() {
-    if (lastRouteParams || routeLayer) {
-        invalidateCurrentRoute('Route settings changed. Generate a new route to refresh the map and download.');
+    try {
+        // Nominatim allows one request per second, which a submit button keeps us well under.
+        const url = new URL('https://nominatim.openstreetmap.org/search');
+        url.search = new URLSearchParams({ q: query, format: 'jsonv2', limit: '1' }).toString();
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error('Search is not available right now. Click the map instead.');
+        }
+
+        const [place] = await response.json();
+        if (version !== state.startVersion) {
+            return; // The user picked a start some other way while we waited.
+        }
+        if (!place) {
+            setStatus('error', `Nothing found for ${query}. Try a street name and town, or click the map.`);
+            return;
+        }
+
+        setStart(Number(place.lat), Number(place.lon), place.display_name);
+        setStatus('info', 'Start point set. Choose a distance and press Generate route.');
+    } catch (error) {
+        if (version !== state.startVersion) {
+            return;
+        }
+        setStatus('error', error instanceof TypeError
+            ? 'Search is not available right now. Click the map instead.'
+            : error.message);
+    } finally {
+        setBusy(el.searchButton, false);
     }
 }
 
-function updateUserLocation(lat, lng, statusMessage) {
-    userLocation = { lat, lon: lng };
-    elements.routeSelectionText.textContent = `Start location: ${formatCoordinates(lat, lng)}`;
-    invalidateCurrentRoute(statusMessage, false);
-}
-
-function updateUserMarker(lat, lng, label) {
-
-    if (userMarker) {
-        userMarker.setLatLng([lat, lng]);
-        userMarker.bindPopup(label).openPopup();
-    } else {
-        userMarker = L.marker([lat, lng])
-            .addTo(map)
-            .bindPopup(label)
-            .openPopup();
-    }
-}
-
-async function useMyLocation() {
+function useMyLocation() {
     if (!navigator.geolocation) {
-        setStatus('error', 'Geolocation is not supported by your browser. Choose a start location on the map instead.');
+        setStatus('error', 'This browser cannot share your location. Search for a place or click the map instead.');
         return;
     }
 
-    setLocationButtonsBusy(true);
-    setStatus('loading', 'Requesting your current location...');
+    const version = ++state.startVersion;
+    setBusy(el.useLocationButton, true, 'Finding you...');
+    setStatus('loading', 'Waiting for your location...');
 
     navigator.geolocation.getCurrentPosition(
-        (position) => {
-            const { latitude, longitude } = position.coords;
-
-            map.setView([latitude, longitude], 13);
-            updateUserMarker(latitude, longitude, 'Your current location');
-            updateUserLocation(latitude, longitude, 'Location updated. Generate a route when ready.');
-            setLocationButtonsBusy(false);
+        ({ coords }) => {
+            setBusy(el.useLocationButton, false);
+            if (version !== state.startVersion) {
+                return; // The user picked a start some other way while we waited.
+            }
+            setStart(coords.latitude, coords.longitude, 'Your location');
+            setStatus('info', 'Using your location. Choose a distance and press Generate route.');
         },
         (error) => {
-            setLocationButtonsBusy(false);
-            setStatus('error', getGeolocationErrorMessage(error));
+            setBusy(el.useLocationButton, false);
+            if (version !== state.startVersion) {
+                return;
+            }
+            setStatus('error', geolocationErrorMessage(error));
         },
-        {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0
-        }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
     );
 }
 
-async function generateRoute() {
-    if (!userLocation) {
-        setStatus('error', 'Choose a start location by clicking on the map or using your current location.');
+/** @param {SubmitEvent} event */
+async function generateRoute(event) {
+    event.preventDefault();
+
+    if (!el.routeForm.reportValidity()) {
         return;
     }
 
-    setButtonState(elements.generateButton, true, 'Generating route...');
-    clearCurrentRouteDisplay();
-    setStatus('loading', 'Generating a circular route...');
+    if (!state.start) {
+        setStatus('error', 'Set a start point first: search for a place, click the map or use your location.');
+        return;
+    }
 
-    const distance = parseFloat(elements.distanceInput.value);
-    const profile = elements.profileSelect.value;
+    clearRoute();
+
+    // Take a copy of everything now. The user can change the start or settings while we wait.
+    const params = {
+        latitude: state.start.lat,
+        longitude: state.start.lng,
+        distance: el.distance.valueAsNumber,
+        profile: el.profile.value,
+    };
+    const request = new AbortController();
+    state.pendingRequest = request;
+
+    setBusy(el.generateButton, true, 'Generating...');
+    setStatus('loading', 'Finding a route. This can take a few seconds.');
 
     try {
         const response = await fetch('/api/routes/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                latitude: userLocation.lat,
-                longitude: userLocation.lon,
-                distance: distance,
-                profile: profile
-            })
+            body: JSON.stringify(params),
+            signal: request.signal,
         });
 
         if (!response.ok) {
-            throw new Error(await getResponseErrorMessage(response, 'Unable to generate a route right now.'));
+            throw new Error(await readErrorMessage(response, 'Could not make a route right now. Try again.'));
         }
 
         const route = await response.json();
-
-        const latLngs = route.coordinates.map(c => [c.latitude, c.longitude]);
-        routeLayer = L.polyline(latLngs, { color: '#2563eb', weight: 4 }).addTo(map);
-        map.fitBounds(routeLayer.getBounds());
-
-        lastRouteParams = {
-            latitude: userLocation.lat,
-            longitude: userLocation.lon,
-            distance: distance,
-            profile: profile,
-            seed: route.seed
-        };
-
-        renderRouteDetails(route, profile);
-        updateDownloadAvailability();
-        setStatus('success', 'Route generated. The download menu is now available.');
-
+        showRoute(params, route);
+        setStatus('success', `Route ready: ${route.distance.toFixed(1)} km.`);
     } catch (error) {
-        clearCurrentRouteDisplay();
-        setStatus('error', error.message);
+        if (error.name === 'AbortError') {
+            return;
+        }
+        setStatus('error', error instanceof TypeError
+            ? 'Could not reach the server. Check your connection and try again.'
+            : error.message);
     } finally {
-        setButtonState(elements.generateButton, false);
+        if (state.pendingRequest === request) {
+            state.pendingRequest = null;
+            setBusy(el.generateButton, false);
+        }
     }
 }
 
-async function downloadRoute(format) {
-    if (!lastRouteParams) {
-        setStatus('error', 'Generate a route before downloading it.');
+/** @param {'gpx' | 'geojson'} format */
+function downloadRoute(format) {
+    if (!state.current) {
         return;
     }
 
-    closeDropdown();
-    setDownloadBusy(true, `Downloading ${format.toUpperCase()}...`);
-    setStatus('loading', `Preparing your ${format.toUpperCase()} download...`);
+    const { params, route } = state.current;
+    const file = buildRouteFile(format, route, {
+        name: `${route.distance.toFixed(1)} km ${profileLabel(params.profile).toLowerCase()} loop`,
+        profile: params.profile,
+    });
 
-    try {
-        const response = await fetch(`/api/routes/download?format=${format}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(lastRouteParams)
-        });
+    const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.fileName;
+    link.click();
+    // Some browsers cancel the download if the URL is revoked straight away.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-        if (!response.ok) {
-            throw new Error(await getResponseErrorMessage(response, `Unable to download a ${format.toUpperCase()} route right now.`));
-        }
+    setStatus('success', `Saved ${file.fileName}.`);
+}
 
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `route.${format}`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        setStatus('success', `Route downloaded as ${format.toUpperCase()}.`);
-    } catch (error) {
-        setStatus('error', error.message);
-    } finally {
-        setDownloadBusy(false);
+function onSettingsChanged() {
+    if (state.current || state.pendingRequest) {
+        clearRoute();
+        setStatus('info', 'Settings changed. Press Generate route to get a new route.');
     }
 }
 
-function renderRouteDetails(route, profile) {
-    elements.routeProfileValue.textContent = getProfileLabel(profile);
-    elements.routeDistanceValue.textContent = `${route.distance.toFixed(1)} km`;
-    elements.routeDurationValue.textContent = formatDuration(route.duration);
-    elements.routeDetails.hidden = false;
+function showRoute(params, route) {
+    state.current = { params, route };
+
+    routeLayer = L.polyline(route.coordinates.map((c) => [c.latitude, c.longitude]), {
+        color: getComputedStyle(document.documentElement).getPropertyValue('--route-line').trim(),
+        weight: 5,
+        attribution: 'Route: <a href="https://openrouteservice.org/">openrouteservice</a>',
+    }).addTo(map);
+    map.fitBounds(routeLayer.getBounds(), { padding: [24, 24] });
+
+    const pace = FOOT_PROFILES.has(params.profile) ? ' at walking pace' : '';
+    el.routeProfile.textContent = profileLabel(params.profile);
+    el.routeDistance.textContent = `${route.distance.toFixed(1)} km`;
+    el.routeDuration.textContent = `${formatDuration(route.duration)}${pace}`;
+    el.routeDetails.hidden = false;
 }
 
-function clearCurrentRouteDisplay() {
+/** Removes the drawn route and cancels a route request that is still running. */
+function clearRoute() {
+    if (state.pendingRequest) {
+        state.pendingRequest.abort();
+        state.pendingRequest = null;
+        setBusy(el.generateButton, false);
+    }
+
     if (routeLayer) {
-        map.removeLayer(routeLayer);
+        routeLayer.remove();
         routeLayer = null;
     }
 
-    elements.routeDetails.hidden = true;
-    elements.routeProfileValue.textContent = 'Not available';
-    elements.routeDistanceValue.textContent = 'Not available';
-    elements.routeDurationValue.textContent = 'Not available';
-    lastRouteParams = null;
-    updateDownloadAvailability();
+    state.current = null;
+    el.routeDetails.hidden = true;
 }
 
-function invalidateCurrentRoute(statusMessage, clearStatus = true) {
-    clearCurrentRouteDisplay();
-
-    if (statusMessage) {
-        setStatus('info', statusMessage);
-    } else if (clearStatus) {
-        setStatus('info', 'Select a location on the map or use your current location to begin.');
-    }
-}
-
+/** @param {'info' | 'success' | 'error' | 'loading'} type @param {string} message */
 function setStatus(type, message) {
-    elements.routeStatusMessage.className = `status-message status-${type}`;
-    elements.routeStatusMessage.textContent = message;
+    el.status.className = `status status-${type}`;
+    el.status.textContent = message;
 }
 
-function updateDownloadAvailability() {
-    const hasRoute = Boolean(lastRouteParams);
-    elements.downloadButton.disabled = !hasRoute;
-    elements.downloadButton.setAttribute('aria-disabled', String(!hasRoute));
-
-    if (!hasRoute) {
-        closeDropdown();
-    }
+/** @param {HTMLButtonElement} button @param {boolean} busy @param {string} [label] */
+function setBusy(button, busy, label) {
+    button.dataset.label ??= button.textContent;
+    button.disabled = busy;
+    button.classList.toggle('is-busy', busy);
+    button.toggleAttribute('aria-busy', busy);
+    button.textContent = busy && label ? label : button.dataset.label;
 }
 
-function setButtonState(button, isBusy, label = null) {
-    const defaultLabel = button.dataset.defaultLabel;
-    button.disabled = isBusy;
-    button.classList.toggle('is-busy', isBusy);
-
-    if (isBusy) {
-        button.setAttribute('aria-busy', 'true');
-        button.textContent = label ?? defaultLabel;
-    } else {
-        button.removeAttribute('aria-busy');
-        button.textContent = defaultLabel;
-    }
+/** @param {string} profile */
+function profileLabel(profile) {
+    return [...el.profile.options].find((option) => option.value === profile)?.textContent ?? profile;
 }
 
-function setLocationButtonsBusy(isBusy) {
-    setButtonState(elements.useLocationButton, isBusy, 'Getting location...');
-    elements.navUseLocationButton.disabled = isBusy;
-    elements.navUseLocationButton.classList.toggle('is-busy', isBusy);
-
-    if (isBusy) {
-        elements.navUseLocationButton.setAttribute('aria-busy', 'true');
-        elements.navUseLocationButton.textContent = 'Getting location...';
-    } else {
-        elements.navUseLocationButton.removeAttribute('aria-busy');
-        elements.navUseLocationButton.textContent = elements.navUseLocationButton.dataset.defaultLabel;
-    }
-}
-
-function setDownloadBusy(isBusy, label = null) {
-    elements.downloadButton.classList.toggle('is-busy', isBusy);
-
-    if (isBusy) {
-        elements.downloadButton.disabled = true;
-        elements.downloadButton.setAttribute('aria-busy', 'true');
-        elements.downloadButton.textContent = label ?? elements.downloadButton.dataset.defaultLabel;
-    } else {
-        elements.downloadButton.removeAttribute('aria-busy');
-        elements.downloadButton.textContent = elements.downloadButton.dataset.defaultLabel;
-        updateDownloadAvailability();
-    }
-}
-
-async function getResponseErrorMessage(response, fallbackMessage) {
-    let detail = '';
-
-    try {
-        const payload = await response.json();
-
-        if (payload?.errors) {
-            const firstErrorGroup = Object.values(payload.errors)[0];
-            if (Array.isArray(firstErrorGroup) && firstErrorGroup.length > 0) {
-                detail = firstErrorGroup[0];
-            }
-        } else {
-            detail = payload?.detail || payload?.title || '';
-        }
-
-        const retryAfterSeconds = payload?.retryAfterSeconds ?? response.headers.get('Retry-After');
-        if (response.status === 429 && retryAfterSeconds && detail) {
-            detail = `${detail} Try again in ${retryAfterSeconds} seconds.`;
-        }
-    } catch {
-        const retryAfterSeconds = response.headers.get('Retry-After');
-        if (response.status === 429 && retryAfterSeconds) {
-            detail = `Too many requests. Try again in ${retryAfterSeconds} seconds.`;
-        }
-    }
-
-    return detail || fallbackMessage;
-}
-
-function getGeolocationErrorMessage(error) {
+/** @param {GeolocationPositionError} error */
+function geolocationErrorMessage(error) {
     switch (error.code) {
         case error.PERMISSION_DENIED:
-            return 'Location permission was denied. Choose a start location on the map instead.';
-        case error.POSITION_UNAVAILABLE:
-            return 'Your location is currently unavailable. Try again or choose a start location on the map.';
+            return 'Location access was blocked. Search for a place or click the map instead.';
         case error.TIMEOUT:
-            return 'Getting your location took too long. Try again or choose a start location on the map.';
+            return 'Finding your location took too long. Try again, or click the map.';
         default:
-            return 'Could not get your location. Choose a start location on the map instead.';
+            return 'Your location is not available. Search for a place or click the map instead.';
     }
-}
-
-function getProfileLabel(profile) {
-    const selectedOption = Array.from(elements.profileSelect.options)
-        .find((option) => option.value === profile);
-
-    return selectedOption?.textContent?.trim() ?? profile;
-}
-
-function formatCoordinates(lat, lng) {
-    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-}
-
-function formatDuration(durationSeconds) {
-    const totalMinutes = Math.max(1, Math.round(durationSeconds / 60));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-
-    if (hours === 0) {
-        return `${totalMinutes} min`;
-    }
-
-    if (minutes === 0) {
-        return `${hours} hr`;
-    }
-
-    return `${hours} hr ${minutes} min`;
 }

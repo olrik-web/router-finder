@@ -8,7 +8,7 @@ using RouteFinder.Features.Route.Services;
 namespace RouteFinder.Tests.Infrastructure;
 
 public sealed class RouteFinderWebApplicationFactory(
-    TestOpenRouteService routeService,
+    TestOpenRouteService? routeService = null,
     IReadOnlyDictionary<string, string?>? configurationOverrides = null) : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -20,12 +20,9 @@ public sealed class RouteFinderWebApplicationFactory(
                 ["OpenRouteService:ApiKey"] = "test-api-key"
             };
 
-            if (configurationOverrides is not null)
+            foreach (var (key, value) in configurationOverrides ?? new Dictionary<string, string?>())
             {
-                foreach (var (key, value) in configurationOverrides)
-                {
-                    configurationValues[key] = value;
-                }
+                configurationValues[key] = value;
             }
 
             configurationBuilder.AddInMemoryCollection(configurationValues);
@@ -34,7 +31,7 @@ public sealed class RouteFinderWebApplicationFactory(
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IOpenRouteService>();
-            services.AddSingleton<IOpenRouteService>(routeService);
+            services.AddSingleton<IOpenRouteService>(routeService ?? new TestOpenRouteService());
         });
     }
 }
